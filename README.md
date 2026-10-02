@@ -14,17 +14,17 @@ You can update the config.json
 Just add the new extensions you want, and the libretro dataset you want to use
 ```
 {
-  "smc": "libretro-database/metadat/No-Intro/Nintendo - Super Nintendo Entertainment System.dat",
-  "sfc": "libretro-database/metadat/No-Intro/Nintendo - Super Nintendo Entertainment System.dat",
-  "gb": "libretro-database/metadat/No-Intro/Nintendo - Game Boy.dat",
-  "gbc": "libretro-database/metadat/No-Intro/Nintendo - Game Boy Color.dat",
-  "md": "libretro-database/metadat/No-Intro/Sega - Mega Drive - Genesis.dat",
-  "nes": "libretro-database/metadat/No-Intro/Nintendo - Nintendo Entertainment System.dat",
-  "32x": "libretro-database/metadat/No-Intro/Sega - 32X.dat",
-  "n64": "libretro-database/metadat/No-Intro/Nintendo - Nintendo 64.dat",
-  "v64": "libretro-database/metadat/No-Intro/Nintendo - Nintendo 64.dat",
-  "nds": "libretro-database/metadat/No-Intro/Nintendo - Nintendo DS.dat",
-  "iso": "libretro-database/metadat/No-Intro/Sony - PlayStation Portable.dat"
+  "smc": "libretro-database/metadat/no-intro/Nintendo - Super Nintendo Entertainment System.dat",
+  "sfc": "libretro-database/metadat/no-intro/Nintendo - Super Nintendo Entertainment System.dat",
+  "gb": "libretro-database/metadat/no-intro/Nintendo - Game Boy.dat",
+  "gbc": "libretro-database/metadat/no-intro/Nintendo - Game Boy Color.dat",
+  "md": "libretro-database/metadat/no-intro/Sega - Mega Drive - Genesis.dat",
+  "nes": "libretro-database/metadat/no-intro/Nintendo - Nintendo Entertainment System.dat",
+  "32x": "libretro-database/metadat/no-intro/Sega - 32X.dat",
+  "n64": "libretro-database/metadat/no-intro/Nintendo - Nintendo 64.dat",
+  "v64": "libretro-database/metadat/no-intro/Nintendo - Nintendo 64.dat",
+  "nds": "libretro-database/metadat/no-intro/Nintendo - Nintendo DS.dat",
+  "iso": "libretro-database/metadat/no-intro/Sony - PlayStation Portable.dat"
 }
 ```
 
