@@ -31,11 +31,17 @@ roms_path = os.path.dirname(os.path.realpath(__file__))
 
 # Default closest distance
 closest_distance_threshold = 10
+dry_run = False
 
 # Parse command line arguments
 for arg in sys.argv[1:]:
     if arg.startswith('-distance='):
         closest_distance_threshold = int(arg.split('=')[1])
+    elif arg in ('--dry-run', '-dry-run'):
+        dry_run = True
+
+if dry_run:
+    log.info('Dry-run mode enabled — no files will be renamed')
 
 def parse_dat_file(dat_file_path, filter_prefix):
     name_map = {}
@@ -142,8 +148,11 @@ for extension, filenames in files_by_extension.items():
             new_name = correct_region_tag(new_name)
             new_filepath = os.path.join(roms_path, new_name)
             if not os.path.exists(new_filepath):
-                os.rename(filepath, new_filepath)
-                log.info(f'Renamed: {filename} -> {new_name} (CRC match)')
+                if dry_run:
+                    log.info(f'[DRY-RUN] Would rename: {filename} -> {new_name} (CRC match)')
+                else:
+                    os.rename(filepath, new_filepath)
+                    log.info(f'Renamed: {filename} -> {new_name} (CRC match)')
                 stats['renamed'] += 1
             else:
                 log.warning(f'Skipping: target already exists -> {new_filepath}')
@@ -170,8 +179,11 @@ for extension, filenames in files_by_extension.items():
                 new_name = correct_region_tag(new_name)
                 new_filepath = os.path.join(roms_path, new_name)
                 if not os.path.exists(new_filepath):
-                    os.rename(filepath, new_filepath)
-                    log.info(f'Renamed: {filename} -> {new_name} (approximate match, distance={closest_distance})')
+                    if dry_run:
+                        log.info(f'[DRY-RUN] Would rename: {filename} -> {new_name} (approximate match, distance={closest_distance})')
+                    else:
+                        os.rename(filepath, new_filepath)
+                        log.info(f'Renamed: {filename} -> {new_name} (approximate match, distance={closest_distance})')
                     stats['approximate'] += 1
                 else:
                     log.warning(f'Skipping: target already exists -> {new_filepath}')
