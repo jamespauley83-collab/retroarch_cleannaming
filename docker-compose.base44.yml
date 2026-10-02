@@ -2,20 +2,22 @@ services:
   app:
     image: python:3.12-slim
     working_dir: /app
+    ports:
+      - "3000:3000"
     volumes:
       - ./:/app
       - libretro-db:/app/libretro-database
     environment:
       - BASE44_PUBLIC_HOST_SUFFIX=${BASE44_PUBLIC_HOST_SUFFIX}
       - BASE44_SANDBOX_HOST_DOMAIN=${BASE44_SANDBOX_HOST_DOMAIN}
-    command: ["sh", "-ec", "apt-get update -qq && apt-get install -y -qq git > /dev/null 2>&1 && if [ ! -d /app/libretro-database/.git ]; then git clone --depth 1 https://github.com/libretro/libretro-database.git /app/libretro-database; fi && pip install --quiet --no-cache-dir -r requirements.txt && echo 'Environment ready. Place ROM files in /app and run: python3 rename_roms.py' && tail -f /dev/null"]
+    command: ["sh", "-ec", "apt-get update -qq && apt-get install -y -qq git > /dev/null 2>&1 && if [ ! -d /app/libretro-database/.git ]; then git clone --depth 1 https://github.com/libretro/libretro-database.git /app/libretro-database; fi && pip install --quiet --no-cache-dir -r requirements.txt && echo 'Environment ready. Place ROM files in /app and run: python3 rename_roms.py' && exec python3 /app/preview_server.py"]
     restart: on-failure
     healthcheck:
-      test: ["CMD", "sh", "-c", "python3 -c 'import Levenshtein' && test -d /app/libretro-database/.git"]
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:3000/', timeout=3)"]
       interval: 10s
       timeout: 5s
       retries: 5
-      start_period: 60s
+      start_period: 90s
 
 volumes:
   libretro-db:
