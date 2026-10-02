@@ -7,13 +7,15 @@ services:
     volumes:
       - ./:/app
       - libretro-db:/app/libretro-database
+    ports:
+      - "3000:3000"
     environment:
       - BASE44_PUBLIC_HOST_SUFFIX=${BASE44_PUBLIC_HOST_SUFFIX}
       - BASE44_SANDBOX_HOST_DOMAIN=${BASE44_SANDBOX_HOST_DOMAIN}
     command: ["sh", "-ec", "apt-get update -qq && apt-get install -y -qq git > /dev/null 2>&1 && if [ ! -d /app/libretro-database/.git ]; then git clone --depth 1 https://github.com/libretro/libretro-database.git /app/libretro-database; fi && pip install --quiet --no-cache-dir -r requirements.txt && echo 'Environment ready. Place ROM files in /app and run: python3 rename_roms.py' && exec python3 /app/preview_server.py"]
     restart: on-failure
     healthcheck:
-      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:3000/', timeout=3)"]
+      test: ["CMD", "sh", "-c", "python3 -c 'import urllib.request; urllib.request.urlopen(\"http://localhost:3000/\").read()' && python3 -c 'import Levenshtein' && test -d /app/libretro-database/.git"]
       interval: 10s
       timeout: 5s
       retries: 5
