@@ -24,6 +24,14 @@ ROM files must be placed in the working directory (`/app` inside the container).
   ```
 - The `libretro-database` clone persists in a named volume so it isn't re-cloned on restart.
 
+## Preview
+- `preview_server.py` serves a lightweight status dashboard on port 3000 so the Base44 preview has something to display.
+- It shows environment readiness (libretro-database clone, Python deps) and detected ROM files, plus usage instructions.
+- The actual renaming tool is still run via `docker compose exec app python3 rename_roms.py`.
+
 ## Notes
-- No browser preview: this is a CLI tool, so port 3000 serves nothing.
 - `config.json` maps file extensions to libretro `.dat` file paths.
+
+## Testing
+- Run dashboard regression tests with `python3 -m unittest discover -s tests -v`.
+- These use temporary fixtures and require only the Python standard library.
