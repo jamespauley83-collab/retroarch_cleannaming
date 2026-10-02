@@ -6,10 +6,24 @@ import sys
 import logging
 from Levenshtein import distance
 
+# Default closest distance
+closest_distance_threshold = 10
+dry_run = False
+verbose = False
+
+# Parse command line arguments
+for arg in sys.argv[1:]:
+    if arg.startswith('-distance='):
+        closest_distance_threshold = int(arg.split('=')[1])
+    elif arg in ('--dry-run', '-dry-run'):
+        dry_run = True
+    elif arg in ('--verbose', '-verbose', '-v'):
+        verbose = True
+
 # --- Logging setup: writes to both console and a log file ---
 log_file_path = os.path.join(os.path.dirname(os.path.realpath(__file__)), 'rename_log.txt')
 logging.basicConfig(
-    level=logging.INFO,
+    level=logging.DEBUG if verbose else logging.INFO,
     format='%(asctime)s [%(levelname)s] %(message)s',
     handlers=[
         logging.StreamHandler(sys.stdout),
@@ -28,17 +42,6 @@ with open(config_path, 'r', encoding='utf-8') as config_file:
 
 # Path to your ROM files
 roms_path = os.path.dirname(os.path.realpath(__file__))
-
-# Default closest distance
-closest_distance_threshold = 10
-dry_run = False
-
-# Parse command line arguments
-for arg in sys.argv[1:]:
-    if arg.startswith('-distance='):
-        closest_distance_threshold = int(arg.split('=')[1])
-    elif arg in ('--dry-run', '-dry-run'):
-        dry_run = True
 
 if dry_run:
     log.info('Dry-run mode enabled — no files will be renamed')
@@ -135,6 +138,7 @@ for filename in os.listdir(roms_path):
 # Process files by extension
 for extension, filenames in files_by_extension.items():
     dat_file_path = os.path.join(roms_path, config[extension])
+    log.debug(f'Extension .{extension}: {len(filenames)} file(s) found, database: {config[extension]}')
     
     # Process each file
     for filename in filenames:
@@ -142,7 +146,9 @@ for extension, filenames in files_by_extension.items():
         filepath = os.path.join(roms_path, filename)
         filter_prefix = filename[:3]  # Use the first three letters for filtering
         name_map = parse_dat_file(dat_file_path, filter_prefix)
+        log.debug(f'Loaded {len(name_map)} database entries matching prefix "{filter_prefix}"')
         crc = get_crc32(filepath)
+        log.debug(f'CRC32 for {filename}: {crc}')
         if crc in name_map:
             new_name = f"{name_map[crc]}.{extension}"
             new_name = correct_region_tag(new_name)
@@ -170,6 +176,7 @@ for extension, filenames in files_by_extension.items():
                 if filename_number and db_name_number and filename_number != db_name_number:
                     continue
                 current_distance = distance(norm_filename, db_name)
+                log.debug(f'  Candidate: {name_map[db_name]} (distance={current_distance})')
                 if current_distance < closest_distance:
                     closest_distance = current_distance
                     closest_match = name_map[db_name]
