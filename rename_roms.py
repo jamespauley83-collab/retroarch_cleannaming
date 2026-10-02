@@ -3,7 +3,37 @@ import re
 import json
 import zlib
 import sys
+import logging
 from Levenshtein import distance
+
+# Default closest distance
+closest_distance_threshold = 10
+dry_run = False
+verbose = False
+
+# Parse command line arguments
+for arg in sys.argv[1:]:
+    if arg.startswith('-distance='):
+        closest_distance_threshold = int(arg.split('=')[1])
+    elif arg in ('--dry-run', '-dry-run'):
+        dry_run = True
+    elif arg in ('--verbose', '-verbose', '-v'):
+        verbose = True
+
+# --- Logging setup: writes to both console and a log file ---
+log_file_path = os.path.join(os.path.dirname(os.path.realpath(__file__)), 'rename_log.txt')
+logging.basicConfig(
+    level=logging.DEBUG if verbose else logging.INFO,
+    format='%(asctime)s [%(levelname)s] %(message)s',
+    handlers=[
+        logging.StreamHandler(sys.stdout),
+        logging.FileHandler(log_file_path, encoding='utf-8'),
+    ],
+)
+log = logging.getLogger(__name__)
+
+# Counters for end-of-run summary
+stats = {'processed': 0, 'renamed': 0, 'approximate': 0, 'skipped': 0, 'no_match': 0}
 
 # Load configuration from JSON file
 config_path = os.path.join(os.path.dirname(os.path.realpath(__file__)), 'config.json')
@@ -13,13 +43,8 @@ with open(config_path, 'r', encoding='utf-8') as config_file:
 # Path to your ROM files
 roms_path = os.path.dirname(os.path.realpath(__file__))
 
-# Default closest distance
-closest_distance_threshold = 10
-
-# Parse command line arguments
-for arg in sys.argv[1:]:
-    if arg.startswith('-distance='):
-        closest_distance_threshold = int(arg.split('=')[1])
+if dry_run:
+    log.info('Dry-run mode enabled — no files will be renamed')
 
 def parse_dat_file(dat_file_path, filter_prefix):
     name_map = {}
@@ -113,35 +138,45 @@ for filename in os.listdir(roms_path):
 # Process files by extension
 for extension, filenames in files_by_extension.items():
     dat_file_path = os.path.join(roms_path, config[extension])
+    log.debug(f'Extension .{extension}: {len(filenames)} file(s) found, database: {config[extension]}')
     
     # Process each file
     for filename in filenames:
+        stats['processed'] += 1
         filepath = os.path.join(roms_path, filename)
         filter_prefix = filename[:3]  # Use the first three letters for filtering
         name_map = parse_dat_file(dat_file_path, filter_prefix)
+        log.debug(f'Loaded {len(name_map)} database entries matching prefix "{filter_prefix}"')
         crc = get_crc32(filepath)
+        log.debug(f'CRC32 for {filename}: {crc}')
         if crc in name_map:
             new_name = f"{name_map[crc]}.{extension}"
             new_name = correct_region_tag(new_name)
             new_filepath = os.path.join(roms_path, new_name)
             if not os.path.exists(new_filepath):
-                os.rename(filepath, new_filepath)
-                print(f'Renamed {filename} to {new_name}')
+                if dry_run:
+                    log.info(f'[DRY-RUN] Would rename: {filename} -> {new_name} (CRC match)')
+                else:
+                    os.rename(filepath, new_filepath)
+                    log.info(f'Renamed: {filename} -> {new_name} (CRC match)')
+                stats['renamed'] += 1
             else:
-                print(f'File {new_filepath} already exists, skipping renaming to avoid overwriting.')
+                log.warning(f'Skipping: target already exists -> {new_filepath}')
+                stats['skipped'] += 1
         else:
             # If the exact CRC match is not found, use approximate matching
             closest_match = None
             closest_distance = float('inf')
             norm_filename = normalize_name(filename.rsplit('.', 1)[0])
             filename_number = extract_number_from_name(norm_filename)
-            print(f"Normalized filename: {norm_filename}")
+            log.info(f'Processing: {filename} (normalized: {norm_filename})')
 
             for db_name in name_map.keys():
                 db_name_number = extract_number_from_name(db_name)
                 if filename_number and db_name_number and filename_number != db_name_number:
                     continue
                 current_distance = distance(norm_filename, db_name)
+                log.debug(f'  Candidate: {name_map[db_name]} (distance={current_distance})')
                 if current_distance < closest_distance:
                     closest_distance = current_distance
                     closest_match = name_map[db_name]
@@ -151,9 +186,25 @@ for extension, filenames in files_by_extension.items():
                 new_name = correct_region_tag(new_name)
                 new_filepath = os.path.join(roms_path, new_name)
                 if not os.path.exists(new_filepath):
-                    os.rename(filepath, new_filepath)
-                    print(f'Approximately renamed {filename} to {new_name}')
+                    if dry_run:
+                        log.info(f'[DRY-RUN] Would rename: {filename} -> {new_name} (approximate match, distance={closest_distance})')
+                    else:
+                        os.rename(filepath, new_filepath)
+                        log.info(f'Renamed: {filename} -> {new_name} (approximate match, distance={closest_distance})')
+                    stats['approximate'] += 1
                 else:
-                    print(f'File {new_filepath} already exists, skipping renaming to avoid overwriting.')
+                    log.warning(f'Skipping: target already exists -> {new_filepath}')
+                    stats['skipped'] += 1
             else:
-                print(f'No close match found for {filename}')
+                log.warning(f'No close match found for {filename}')
+                stats['no_match'] += 1
+
+# --- End-of-run summary ---
+log.info(
+    f'Summary: {stats["processed"]} processed, '
+    f'{stats["renamed"]} renamed (CRC), '
+    f'{stats["approximate"]} renamed (approximate), '
+    f'{stats["skipped"]} skipped, '
+    f'{stats["no_match"]} no match'
+)
+log.info(f'Full log written to {log_file_path}')

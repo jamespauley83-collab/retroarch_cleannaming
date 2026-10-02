@@ -2,6 +2,8 @@ services:
   app:
     image: python:3.12-slim
     working_dir: /app
+    ports:
+      - "3000:3000"
     volumes:
       - ./:/app
       - libretro-db:/app/libretro-database
@@ -17,7 +19,7 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
-      start_period: 60s
+      start_period: 90s
 
 volumes:
   libretro-db:

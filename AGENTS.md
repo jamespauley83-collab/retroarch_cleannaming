@@ -18,7 +18,7 @@ ROM files must be placed in the working directory (`/app` inside the container).
 ## Docker Environment
 - `docker-compose.base44.yml` runs a `python:3.12-slim` container with the source bind-mounted at `/app`.
 - On startup it clones `libretro-database` (if not present) and installs Python dependencies.
-- The container stays alive (`tail -f /dev/null`) so you can exec in and run the script:
+- A lightweight status page (`preview_server.py`) is served on port 3000 so the Base44 preview has an endpoint. The CLI tool itself is still run via exec:
   ```
   docker compose -f docker-compose.base44.yml exec app python3 rename_roms.py
   ```

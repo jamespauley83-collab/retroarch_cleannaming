@@ -1,0 +1,32 @@
+2026-10-02 11:25:37,554 [INFO] Processing: AGENTS.md (normalized: agents)
+2026-10-02 11:25:37,554 [WARNING] No close match found for AGENTS.md
+2026-10-02 11:25:37,562 [INFO] Processing: README.md (normalized: readme)
+2026-10-02 11:25:37,562 [WARNING] No close match found for README.md
+2026-10-02 11:25:37,562 [INFO] Summary: 2 processed, 0 renamed (CRC), 0 renamed (approximate), 0 skipped, 2 no match
+2026-10-02 11:25:37,562 [INFO] Full log written to /app/rename_log.txt
+2026-10-02 11:41:56,897 [INFO] Dry-run mode enabled — no files will be renamed
+2026-10-02 11:41:56,908 [INFO] Processing: AGENTS.md (normalized: agents)
+2026-10-02 11:41:56,908 [WARNING] No close match found for AGENTS.md
+2026-10-02 11:41:56,916 [INFO] Processing: README.md (normalized: readme)
+2026-10-02 11:41:56,916 [WARNING] No close match found for README.md
+2026-10-02 11:41:56,916 [INFO] Summary: 2 processed, 0 renamed (CRC), 0 renamed (approximate), 0 skipped, 2 no match
+2026-10-02 11:41:56,916 [INFO] Full log written to /app/rename_log.txt
+2026-10-02 19:42:36,120 [INFO] Processing: AGENTS.md (normalized: agents)
+2026-10-02 19:42:36,120 [WARNING] No close match found for AGENTS.md
+2026-10-02 19:42:36,128 [INFO] Processing: README.md (normalized: readme)
+2026-10-02 19:42:36,128 [WARNING] No close match found for README.md
+2026-10-02 19:42:36,128 [INFO] Summary: 2 processed, 0 renamed (CRC), 0 renamed (approximate), 0 skipped, 2 no match
+2026-10-02 19:42:36,128 [INFO] Full log written to /app/rename_log.txt
+2026-10-02 19:42:36,281 [DEBUG] Extension .md: 2 file(s) found, database: libretro-database/metadat/no-intro/Sega - Mega Drive - Genesis.dat
+2026-10-02 19:42:36,288 [DEBUG] Loaded 2 database entries matching prefix "AGE"
+2026-10-02 19:42:36,289 [DEBUG] CRC32 for AGENTS.md: 636A009C
+2026-10-02 19:42:36,289 [INFO] Processing: AGENTS.md (normalized: agents)
+2026-10-02 19:42:36,289 [DEBUG]   Candidate: Agent Hugo - Environment at Risk (Russia) (distance=35)
+2026-10-02 19:42:36,289 [DEBUG]   Candidate: Agent Hugo - In the World of Dinosaurs (Russia) (distance=41)
+2026-10-02 19:42:36,289 [WARNING] No close match found for AGENTS.md
+2026-10-02 19:42:36,297 [DEBUG] Loaded 0 database entries matching prefix "REA"
+2026-10-02 19:42:36,297 [DEBUG] CRC32 for README.md: D8DA8245
+2026-10-02 19:42:36,297 [INFO] Processing: README.md (normalized: readme)
+2026-10-02 19:42:36,297 [WARNING] No close match found for README.md
+2026-10-02 19:42:36,297 [INFO] Summary: 2 processed, 0 renamed (CRC), 0 renamed (approximate), 0 skipped, 2 no match
+2026-10-02 19:42:36,297 [INFO] Full log written to /app/rename_log.txt
