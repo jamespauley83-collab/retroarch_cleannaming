@@ -31,3 +31,7 @@ ROM files must be placed in the working directory (`/app` inside the container).
 
 ## Notes
 - `config.json` maps file extensions to libretro `.dat` file paths.
+
+## Testing
+- Run dashboard regression tests with `python3 -m unittest discover -s tests -v`.
+- These use temporary fixtures and require only the Python standard library.

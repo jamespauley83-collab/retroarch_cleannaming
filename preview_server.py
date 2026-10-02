@@ -9,10 +9,13 @@ import json
 import subprocess
 import http.server
 import socketserver
+from html import escape
 
 PORT = 3000
 CONFIG_PATH = os.path.join(os.path.dirname(os.path.realpath(__file__)), "config.json")
 DB_PATH = os.path.join(os.path.dirname(os.path.realpath(__file__)), "libretro-database")
+# These repository documents share the Mega Drive ROM extension.
+PROJECT_MARKDOWN_FILES = {"README.md", "AGENTS.md"}
 
 
 def build_status_page():
@@ -41,7 +44,7 @@ def build_status_page():
                 fp = os.path.join(os.path.dirname(os.path.realpath(__file__)), fn)
                 if os.path.isfile(fp):
                     ext = fn.split(".")[-1].lower()
-                    if ext in config and ext != "md":
+                    if ext in config and fn not in PROJECT_MARKDOWN_FILES:
                         rom_count += 1
                         if len(rom_files) < 10:
                             rom_files.append(fn)
@@ -101,7 +104,7 @@ def build_status_page():
     <div class="info-grid">
       <div class="info-row"><span class="label">libretro-database</span><span class="value">{"✅ Cloned" if db_ready else "⏳ Cloning…"}</span></div>
       <div class="info-row"><span class="label">Python dependencies</span><span class="value">{"✅ Installed" if deps_ready else "⏳ Installing…"}</span></div>
-      <div class="info-row"><span class="label">Supported extensions</span><span class="value">{extensions}</span></div>
+      <div class="info-row"><span class="label">Supported extensions</span><span class="value">{escape(extensions)}</span></div>
       <div class="info-row"><span class="label">ROM files found</span><span class="value">{rom_count}</span></div>
     </div>
 """
@@ -111,7 +114,7 @@ def build_status_page():
       <ul>
 """
         for fn in rom_files:
-            html += f"        <li>{fn}</li>\n"
+            html += f"        <li>{escape(fn)}</li>\n"
         if rom_count > len(rom_files):
             html += f"        <li>… and {rom_count - len(rom_files)} more</li>\n"
         html += "      </ul>\n    </div>\n"
