@@ -6,12 +6,26 @@ from pathlib import Path
 import runpy
 import shutil
 import tempfile
+import types
 import unittest
 from unittest.mock import Mock, patch
 import zlib
 
 
 SCRIPT = Path(__file__).resolve().parents[1] / "rename_roms.py"
+
+
+def levenshtein_distance(left, right):
+    row = list(range(len(right) + 1))
+    for i, left_char in enumerate(left, 1):
+        next_row = [i]
+        for j, right_char in enumerate(right, 1):
+            next_row.append(min(
+                next_row[-1] + 1, row[j] + 1,
+                row[j - 1] + (left_char != right_char),
+            ))
+        row = next_row
+    return row[-1]
 
 
 class RenameRomsTests(unittest.TestCase):
@@ -29,8 +43,12 @@ class RenameRomsTests(unittest.TestCase):
 
             logger = Mock()
             listdir = os.listdir
+            # Keep fixture matching deterministic and standard-library-only.
+            dependency = types.ModuleType("Levenshtein")
+            dependency.distance = levenshtein_distance
             # Use the same deterministic input order in simulated and real runs.
-            with patch("sys.argv", [str(script)] + (["--dry-run"] if dry_run else [])), \
+            with patch.dict("sys.modules", {"Levenshtein": dependency}), \
+                    patch("sys.argv", [str(script)] + (["--dry-run"] if dry_run else [])), \
                     patch("os.listdir", side_effect=lambda path: sorted(listdir(path))), \
                     patch("os.rename", wraps=os.rename) as rename, \
                     patch("logging.basicConfig"), patch("logging.FileHandler"), \
