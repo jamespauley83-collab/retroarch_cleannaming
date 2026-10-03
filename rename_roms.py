@@ -33,7 +33,22 @@ logging.basicConfig(
 log = logging.getLogger(__name__)
 
 # Counters for end-of-run summary
-stats = {'processed': 0, 'renamed': 0, 'approximate': 0, 'skipped': 0, 'no_match': 0}
+stats = {'processed': 0, 'renamed': 0, 'approximate': 0, 'skipped': 0, 'no_match': 0,
+         'planned_crc': 0, 'planned_approximate': 0}
+
+# Simulate filesystem changes made by earlier dry-run operations.
+projected_destinations = set()
+projected_sources = set()
+
+def destination_exists(filepath):
+    return (filepath in projected_destinations or
+            (os.path.exists(filepath) and filepath not in projected_sources))
+
+def plan_rename(filepath, new_filepath):
+    projected_destinations.discard(filepath)
+    projected_sources.add(filepath)
+    projected_destinations.add(new_filepath)
+    projected_sources.discard(new_filepath)
 
 # Load configuration from JSON file
 config_path = os.path.join(os.path.dirname(os.path.realpath(__file__)), 'config.json')
@@ -153,13 +168,15 @@ for extension, filenames in files_by_extension.items():
             new_name = f"{name_map[crc]}.{extension}"
             new_name = correct_region_tag(new_name)
             new_filepath = os.path.join(roms_path, new_name)
-            if not os.path.exists(new_filepath):
+            if not destination_exists(new_filepath):
                 if dry_run:
+                    plan_rename(filepath, new_filepath)
+                    stats['planned_crc'] += 1
                     log.info(f'[DRY-RUN] Would rename: {filename} -> {new_name} (CRC match)')
                 else:
                     os.rename(filepath, new_filepath)
+                    stats['renamed'] += 1
                     log.info(f'Renamed: {filename} -> {new_name} (CRC match)')
-                stats['renamed'] += 1
             else:
                 log.warning(f'Skipping: target already exists -> {new_filepath}')
                 stats['skipped'] += 1
@@ -185,13 +202,15 @@ for extension, filenames in files_by_extension.items():
                 new_name = f"{closest_match}.{extension}"
                 new_name = correct_region_tag(new_name)
                 new_filepath = os.path.join(roms_path, new_name)
-                if not os.path.exists(new_filepath):
+                if not destination_exists(new_filepath):
                     if dry_run:
+                        plan_rename(filepath, new_filepath)
+                        stats['planned_approximate'] += 1
                         log.info(f'[DRY-RUN] Would rename: {filename} -> {new_name} (approximate match, distance={closest_distance})')
                     else:
                         os.rename(filepath, new_filepath)
+                        stats['approximate'] += 1
                         log.info(f'Renamed: {filename} -> {new_name} (approximate match, distance={closest_distance})')
-                    stats['approximate'] += 1
                 else:
                     log.warning(f'Skipping: target already exists -> {new_filepath}')
                     stats['skipped'] += 1
@@ -200,10 +219,15 @@ for extension, filenames in files_by_extension.items():
                 stats['no_match'] += 1
 
 # --- End-of-run summary ---
+planned_summary = (
+    f'{stats["planned_crc"]} planned (CRC), '
+    f'{stats["planned_approximate"]} planned (approximate), '
+) if dry_run else ''
 log.info(
     f'Summary: {stats["processed"]} processed, '
     f'{stats["renamed"]} renamed (CRC), '
     f'{stats["approximate"]} renamed (approximate), '
+    f'{planned_summary}'
     f'{stats["skipped"]} skipped, '
     f'{stats["no_match"]} no match'
 )
