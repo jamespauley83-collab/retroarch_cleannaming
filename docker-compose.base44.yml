@@ -7,8 +7,6 @@ services:
     volumes:
       - ./:/app
       - libretro-db:/app/libretro-database
-    ports:
-      - "3000:3000"
     environment:
       - BASE44_PUBLIC_HOST_SUFFIX=${BASE44_PUBLIC_HOST_SUFFIX}
       - BASE44_SANDBOX_HOST_DOMAIN=${BASE44_SANDBOX_HOST_DOMAIN}
