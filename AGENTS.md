@@ -31,6 +31,7 @@ ROM files must be placed in the working directory (`/app` inside the container).
 
 ## Notes
 - `config.json` maps file extensions to libretro `.dat` file paths.
+- `docker-compose.base44.yml` must define `ports:` exactly once. A prior merge introduced a duplicate `ports:` key, which made `docker compose` fail to parse the file with a YAML "mapping key already defined" error — keep a single `ports:` block.
 
 ## Testing
 - Run dashboard regression tests with `python3 -m unittest discover -s tests -v`.
