@@ -1,0 +1,52 @@
+name: Validate PR 7 corrected head
+on:
+  push:
+    branches: [validation/pr7-20261006]
+permissions:
+  contents: read
+jobs:
+  compose-and-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      BASE44_PUBLIC_HOST_SUFFIX: ""
+      BASE44_SANDBOX_HOST_DOMAIN: ""
+    steps:
+      - name: Fetch exact corrected PR head
+        run: |
+          git clone https://github.com/jamespauley83-collab/retroarch_cleannaming.git app
+          cd app
+          git checkout --detach 02bd9c5bbf3ae5aed9d7f804b5c14e8bbb9d89a1
+          test "$(git rev-parse HEAD)" = 02bd9c5bbf3ae5aed9d7f804b5c14e8bbb9d89a1
+          git diff --exit-code 6c17a3d71f1f2ce435eef109b52b56ee7417a1fa -- docker-compose.base44.yml
+          test -z "$(git ls-files '*.pyc')"
+          git check-ignore __pycache__/probe.pyc tests/__pycache__/probe.pyc standalone.pyc
+      - name: Validate Compose port configuration
+        working-directory: app
+        run: |
+          docker compose -f docker-compose.base44.yml config --format json > /tmp/pr7-compose.json
+          python3 -c 'import json; c=json.load(open("/tmp/pr7-compose.json")); p=c["services"]["app"]["ports"]; assert len(p)==1 and p[0]["target"]==3000 and str(p[0]["published"])=="3000", p'
+      - name: Start Compose and wait for healthy service
+        working-directory: app
+        run: docker compose -f docker-compose.base44.yml up -d --wait --wait-timeout 600
+      - name: Verify health and host dashboard response
+        working-directory: app
+        run: |
+          docker compose -f docker-compose.base44.yml ps
+          cid=$(docker compose -f docker-compose.base44.yml ps -q app)
+          test "$(docker inspect --format '{{.State.Health.Status}}' "$cid")" = healthy
+          test "$(curl --silent --show-error --output /tmp/pr7-dashboard.html --write-out '%{http_code}' http://localhost:3000/)" = 200
+          grep -qi '<html' /tmp/pr7-dashboard.html
+          grep -qi 'ROM' /tmp/pr7-dashboard.html
+      - name: Run all 11 tests in Python 3.12 container
+        working-directory: app
+        run: |
+          docker compose -f docker-compose.base44.yml exec -T app python3 -c 'import unittest; suite=unittest.defaultTestLoader.discover("tests"); assert suite.countTestCases()==11, suite.countTestCases()'
+          docker compose -f docker-compose.base44.yml exec -T app python3 -m unittest discover -s tests -v
+          test -z "$(git status --porcelain)"
+      - name: Show startup logs and stop validation containers
+        if: always()
+        working-directory: app
+        run: |
+          docker compose -f docker-compose.base44.yml logs --no-color
+          docker compose -f docker-compose.base44.yml down -v
