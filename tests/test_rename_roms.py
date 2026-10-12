@@ -61,8 +61,9 @@ class RenameRomsTests(unittest.TestCase):
                     patch("os.listdir", side_effect=lambda path: sorted(listdir(path))), \
                     patch("os.rename", wraps=os.rename) as rename, \
                     patch("logging.basicConfig"), patch("logging.FileHandler"), \
-                    patch("logging.getLogger", return_value=logger):
-                result = runpy.run_path(str(script))
+                    patch("logging.getLogger", return_value=logger), \
+                patch("os.getcwd", return_value=str(root)):
+                result = runpy.run_path(str(script), run_name='__main__')
                 rename_count = rename.call_count
                 actual_operations = [
                     tuple(Path(path).name for path in call.args)

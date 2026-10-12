@@ -1,3 +1,6 @@
+#!/usr/bin/env python3
+"""Rename retro game ROM files to match libretro database naming conventions."""
+
 import os
 import re
 import json
@@ -5,32 +8,6 @@ import zlib
 import sys
 import logging
 from Levenshtein import distance
-
-# Default closest distance
-closest_distance_threshold = 10
-dry_run = False
-verbose = False
-
-# Parse command line arguments
-for arg in sys.argv[1:]:
-    if arg.startswith('-distance='):
-        closest_distance_threshold = int(arg.split('=')[1])
-    elif arg in ('--dry-run', '-dry-run'):
-        dry_run = True
-    elif arg in ('--verbose', '-verbose', '-v'):
-        verbose = True
-
-# --- Logging setup: writes to both console and a log file ---
-log_file_path = os.path.join(os.path.dirname(os.path.realpath(__file__)), 'rename_log.txt')
-logging.basicConfig(
-    level=logging.DEBUG if verbose else logging.INFO,
-    format='%(asctime)s [%(levelname)s] %(message)s',
-    handlers=[
-        logging.StreamHandler(sys.stdout),
-        logging.FileHandler(log_file_path, encoding='utf-8'),
-    ],
-)
-log = logging.getLogger(__name__)
 
 # Counters for end-of-run summary
 stats = {'processed': 0, 'renamed': 0, 'approximate': 0, 'skipped': 0, 'no_match': 0,
@@ -49,17 +26,6 @@ def plan_rename(filepath, new_filepath):
     projected_sources.add(filepath)
     projected_destinations.add(new_filepath)
     projected_sources.discard(new_filepath)
-
-# Load configuration from JSON file
-config_path = os.path.join(os.path.dirname(os.path.realpath(__file__)), 'config.json')
-with open(config_path, 'r', encoding='utf-8') as config_file:
-    config = json.load(config_file)
-
-# Path to your ROM files
-roms_path = os.path.dirname(os.path.realpath(__file__))
-
-if dry_run:
-    log.info('Dry-run mode enabled — no files will be renamed')
 
 def parse_dat_file(dat_file_path, filter_prefix):
     """Return CRC-to-title sets and prefix-filtered names from a clrmamepro DAT."""
@@ -180,104 +146,175 @@ def extract_number_from_name(name):
         return match.group(0)
     return None
 
-# Gather all files by extension
-files_by_extension = {}
-for filename in os.listdir(roms_path):
-    filepath = os.path.join(roms_path, filename)
-    if os.path.isfile(filepath):
-        extension = filename.split('.')[-1].lower()
-        if extension in config:
-            if extension not in files_by_extension:
-                files_by_extension[extension] = []
-            files_by_extension[extension].append(filename)
+DEFAULT_CONFIG = {
+    "smc": "libretro-database/metadat/no-intro/Nintendo - Super Nintendo Entertainment System.dat",
+    "sfc": "libretro-database/metadat/no-intro/Nintendo - Super Nintendo Entertainment System.dat",
+    "gb": "libretro-database/metadat/no-intro/Nintendo - Game Boy.dat",
+    "gbc": "libretro-database/metadat/no-intro/Nintendo - Game Boy Color.dat",
+    "gba": "libretro-database/metadat/no-intro/Nintendo - Game Boy Advance.dat",
+    "md": "libretro-database/metadat/no-intro/Sega - Mega Drive - Genesis.dat",
+    "nes": "libretro-database/metadat/no-intro/Nintendo - Nintendo Entertainment System.dat",
+    "32x": "libretro-database/metadat/no-intro/Sega - 32X.dat",
+    "n64": "libretro-database/metadat/no-intro/Nintendo - Nintendo 64.dat",
+    "v64": "libretro-database/metadat/no-intro/Nintendo - Nintendo 64.dat",
+    "nds": "libretro-database/metadat/no-intro/Nintendo - Nintendo DS.dat",
+    "iso": "libretro-database/metadat/no-intro/Sony - PlayStation Portable.dat",
+    "gen": "libretro-database/metadat/no-intro/Sega - Mega Drive - Genesis.dat",
+    "chd": "libretro-database/metadat/developer/Sony - PlayStation.dat",
+    "sbi": "libretro-database/metadat/developer/Sony - PlayStation.dat",
+}
 
-# Process files by extension
-for extension, filenames in files_by_extension.items():
-    dat_file_path = os.path.join(roms_path, config[extension])
-    log.debug(f'Extension .{extension}: {len(filenames)} file(s) found, database: {config[extension]}')
-    
-    # Process each file
-    for filename in filenames:
-        stats['processed'] += 1
+def main():
+    # Reset state for this run
+    for key in stats:
+        stats[key] = 0
+    projected_destinations.clear()
+    projected_sources.clear()
+
+    # Default closest distance
+    closest_distance_threshold = 10
+    dry_run = False
+    verbose = False
+
+    # Parse command line arguments
+    for arg in sys.argv[1:]:
+        if arg.startswith('-distance='):
+            closest_distance_threshold = int(arg.split('=')[1])
+        elif arg in ('--dry-run', '-dry-run'):
+            dry_run = True
+        elif arg in ('--verbose', '-verbose', '-v'):
+            verbose = True
+
+    # --- Logging setup: writes to both console and a log file ---
+    log_file_path = os.path.join(os.getcwd(), 'rename_log.txt')
+    logging.basicConfig(
+        level=logging.DEBUG if verbose else logging.INFO,
+        format='%(asctime)s [%(levelname)s] %(message)s',
+        handlers=[
+            logging.StreamHandler(sys.stdout),
+            logging.FileHandler(log_file_path, encoding='utf-8'),
+        ],
+    )
+    log = logging.getLogger(__name__)
+
+    # Load configuration — check CWD first, fall back to bundled config, then defaults
+    config_path = os.path.join(os.getcwd(), 'config.json')
+    if not os.path.exists(config_path):
+        config_path = os.path.join(os.path.dirname(os.path.realpath(__file__)), 'config.json')
+    if os.path.exists(config_path):
+        with open(config_path, 'r', encoding='utf-8') as config_file:
+            config = json.load(config_file)
+    else:
+        config = DEFAULT_CONFIG
+
+    # Path to your ROM files
+    roms_path = os.getcwd()
+
+    if dry_run:
+        log.info('Dry-run mode enabled — no files will be renamed')
+
+    # Gather all files by extension
+    files_by_extension = {}
+    for filename in os.listdir(roms_path):
         filepath = os.path.join(roms_path, filename)
-        filter_prefix = filename[:3]  # Use the first three letters for filtering
-        crc_map, name_map = parse_dat_file(dat_file_path, filter_prefix)
-        log.debug(f'Loaded {len(crc_map)} CRC entries and {len(name_map)} names matching prefix "{filter_prefix}"')
-        crc = get_crc32(filepath)
-        log.debug(f'CRC32 for {filename}: {crc}')
-        if crc in crc_map:
-            title = resolve_crc_title(crc_map[crc], filename.rsplit('.', 1)[0])
-            if title is None:
-                log.warning(
-                    f'Ambiguous CRC {crc} for {filename}: '
-                    f'{", ".join(sorted(crc_map[crc]))}; leaving file unchanged'
-                )
-                stats['no_match'] += 1
-                continue
-            new_name = f"{title}.{extension}"
-            new_name = correct_region_tag(new_name)
-            new_filepath = os.path.join(roms_path, new_name)
-            if not destination_exists(new_filepath):
-                if dry_run:
-                    plan_rename(filepath, new_filepath)
-                    stats['planned_crc'] += 1
-                    log.info(f'[DRY-RUN] Would rename: {filename} -> {new_name} (CRC match)')
-                else:
-                    os.rename(filepath, new_filepath)
-                    stats['renamed'] += 1
-                    log.info(f'Renamed: {filename} -> {new_name} (CRC match)')
-            else:
-                log.warning(f'Skipping: target already exists -> {new_filepath}')
-                stats['skipped'] += 1
-        else:
-            # If the exact CRC match is not found, use approximate matching
-            closest_match = None
-            closest_distance = float('inf')
-            norm_filename = normalize_name(filename.rsplit('.', 1)[0])
-            filename_number = extract_number_from_name(norm_filename)
-            log.info(f'Processing: {filename} (normalized: {norm_filename})')
+        if os.path.isfile(filepath):
+            extension = filename.split('.')[-1].lower()
+            if extension in config:
+                if extension not in files_by_extension:
+                    files_by_extension[extension] = []
+                files_by_extension[extension].append(filename)
 
-            for db_name in name_map.keys():
-                db_name_number = extract_number_from_name(db_name)
-                if filename_number and db_name_number and filename_number != db_name_number:
+    # Process files by extension
+    for extension, filenames in files_by_extension.items():
+        dat_file_path = os.path.join(roms_path, config[extension])
+        log.debug(f'Extension .{extension}: {len(filenames)} file(s) found, database: {config[extension]}')
+        
+        # Process each file
+        for filename in filenames:
+            stats['processed'] += 1
+            filepath = os.path.join(roms_path, filename)
+            filter_prefix = filename[:3]  # Use the first three letters for filtering
+            crc_map, name_map = parse_dat_file(dat_file_path, filter_prefix)
+            log.debug(f'Loaded {len(crc_map)} CRC entries and {len(name_map)} names matching prefix "{filter_prefix}"')
+            crc = get_crc32(filepath)
+            log.debug(f'CRC32 for {filename}: {crc}')
+            if crc in crc_map:
+                title = resolve_crc_title(crc_map[crc], filename.rsplit('.', 1)[0])
+                if title is None:
+                    log.warning(
+                        f'Ambiguous CRC {crc} for {filename}: '
+                        f'{", ".join(sorted(crc_map[crc]))}; leaving file unchanged'
+                    )
+                    stats['no_match'] += 1
                     continue
-                current_distance = distance(norm_filename, db_name)
-                log.debug(f'  Candidate: {name_map[db_name]} (distance={current_distance})')
-                if current_distance < closest_distance:
-                    closest_distance = current_distance
-                    closest_match = name_map[db_name]
-
-            if closest_match and closest_distance < closest_distance_threshold:  # Use the threshold from the command line or default
-                new_name = f"{closest_match}.{extension}"
+                new_name = f"{title}.{extension}"
                 new_name = correct_region_tag(new_name)
                 new_filepath = os.path.join(roms_path, new_name)
                 if not destination_exists(new_filepath):
                     if dry_run:
                         plan_rename(filepath, new_filepath)
-                        stats['planned_approximate'] += 1
-                        log.info(f'[DRY-RUN] Would rename: {filename} -> {new_name} (approximate match, distance={closest_distance})')
+                        stats['planned_crc'] += 1
+                        log.info(f'[DRY-RUN] Would rename: {filename} -> {new_name} (CRC match)')
                     else:
                         os.rename(filepath, new_filepath)
-                        stats['approximate'] += 1
-                        log.info(f'Renamed: {filename} -> {new_name} (approximate match, distance={closest_distance})')
+                        stats['renamed'] += 1
+                        log.info(f'Renamed: {filename} -> {new_name} (CRC match)')
                 else:
                     log.warning(f'Skipping: target already exists -> {new_filepath}')
                     stats['skipped'] += 1
             else:
-                log.warning(f'No close match found for {filename}')
-                stats['no_match'] += 1
+                # If the exact CRC match is not found, use approximate matching
+                closest_match = None
+                closest_distance = float('inf')
+                norm_filename = normalize_name(filename.rsplit('.', 1)[0])
+                filename_number = extract_number_from_name(norm_filename)
+                log.info(f'Processing: {filename} (normalized: {norm_filename})')
 
-# --- End-of-run summary ---
-planned_summary = (
-    f'{stats["planned_crc"]} planned (CRC), '
-    f'{stats["planned_approximate"]} planned (approximate), '
-) if dry_run else ''
-log.info(
-    f'Summary: {stats["processed"]} processed, '
-    f'{stats["renamed"]} renamed (CRC), '
-    f'{stats["approximate"]} renamed (approximate), '
-    f'{planned_summary}'
-    f'{stats["skipped"]} skipped, '
-    f'{stats["no_match"]} no match'
-)
-log.info(f'Full log written to {log_file_path}')
+                for db_name in name_map.keys():
+                    db_name_number = extract_number_from_name(db_name)
+                    if filename_number and db_name_number and filename_number != db_name_number:
+                        continue
+                    current_distance = distance(norm_filename, db_name)
+                    log.debug(f'  Candidate: {name_map[db_name]} (distance={current_distance})')
+                    if current_distance < closest_distance:
+                        closest_distance = current_distance
+                        closest_match = name_map[db_name]
+
+                if closest_match and closest_distance < closest_distance_threshold:  # Use the threshold from the command line or default
+                    new_name = f"{closest_match}.{extension}"
+                    new_name = correct_region_tag(new_name)
+                    new_filepath = os.path.join(roms_path, new_name)
+                    if not destination_exists(new_filepath):
+                        if dry_run:
+                            plan_rename(filepath, new_filepath)
+                            stats['planned_approximate'] += 1
+                            log.info(f'[DRY-RUN] Would rename: {filename} -> {new_name} (approximate match, distance={closest_distance})')
+                        else:
+                            os.rename(filepath, new_filepath)
+                            stats['approximate'] += 1
+                            log.info(f'Renamed: {filename} -> {new_name} (approximate match, distance={closest_distance})')
+                    else:
+                        log.warning(f'Skipping: target already exists -> {new_filepath}')
+                        stats['skipped'] += 1
+                else:
+                    log.warning(f'No close match found for {filename}')
+                    stats['no_match'] += 1
+
+    # --- End-of-run summary ---
+    planned_summary = (
+        f'{stats["planned_crc"]} planned (CRC), '
+        f'{stats["planned_approximate"]} planned (approximate), '
+    ) if dry_run else ''
+    log.info(
+        f'Summary: {stats["processed"]} processed, '
+        f'{stats["renamed"]} renamed (CRC), '
+        f'{stats["approximate"]} renamed (approximate), '
+        f'{planned_summary}'
+        f'{stats["skipped"]} skipped, '
+        f'{stats["no_match"]} no match'
+    )
+    log.info(f'Full log written to {log_file_path}')
+
+
+if __name__ == '__main__':
+    main()

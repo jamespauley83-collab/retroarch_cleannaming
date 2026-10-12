@@ -2,7 +2,20 @@
 # RetroArch CleanNaming
 This is a simple scripts, that help you to rename the ROMs with the right naming 
 
-# Requirement
+# Installation
+
+## pip install (recommended)
+```
+pip install .
+```
+This installs the `rename-roms` command and the bundled `config.json`.
+
+You still need the libretro database:
+```
+git clone https://github.com/libretro/libretro-database.git
+```
+
+## Manual
 ```
 git clone https://github.com/libretro/libretro-database.git
 pip install python-Levenshtein
