@@ -3,6 +3,7 @@
 import json
 import os
 from pathlib import Path
+import re
 import runpy
 import shutil
 import tempfile
@@ -35,6 +36,7 @@ class RenameRomsTests(unittest.TestCase):
             script = root / "rename_roms.py"
             shutil.copyfile(SCRIPT, script)
             (root / "config.json").write_text(json.dumps({"nes": "games.dat"}))
+            game_records = games.items() if isinstance(games, dict) else games
             (root / "games.dat").write_text("".join(
                 f'game (\n name "{title}"\n'
                 + "".join(
@@ -43,7 +45,7 @@ class RenameRomsTests(unittest.TestCase):
                      f' rom ( name "part {index} (USA).nes" crc {crc} )\n')
                     for index, crc in enumerate(crcs)
                 ) + ')\n'
-                for title, crcs in games.items()
+                for title, crcs in game_records
             ))
             for filename, contents in files.items():
                 (root / filename).write_bytes(contents)
@@ -62,15 +64,31 @@ class RenameRomsTests(unittest.TestCase):
                     patch("logging.getLogger", return_value=logger):
                 result = runpy.run_path(str(script))
                 rename_count = rename.call_count
+                actual_operations = [
+                    tuple(Path(path).name for path in call.args)
+                    for call in rename.call_args_list
+                ]
 
             remaining = {path.name: path.read_bytes() for path in root.glob("*.nes")}
             messages = [call.args[0] for call in logger.info.call_args_list]
             summary = next(message for message in messages if message.startswith("Summary:"))
-            return result["stats"], remaining, rename_count, summary
+            operations = [
+                match.groups() for message in messages
+                if (match := re.match(
+                    r'^\[DRY-RUN\] Would rename: (.*?) -> (.*?) \((?:CRC|approximate) match',
+                    message,
+                ))
+            ] if dry_run else actual_operations
+            warnings = [call.args[0] for call in logger.warning.call_args_list]
+            return result["stats"], remaining, rename_count, summary, operations, warnings
 
-    def assert_preview_matches_run(self, files, games):
-        planned, unchanged, dry_calls, summary = self.run_fixture(files, games, True)
-        actual, remaining, real_calls, real_summary = self.run_fixture(files, games, False)
+    def assert_preview_matches_run(self, files, games, ambiguous=False):
+        planned, unchanged, dry_calls, summary, preview, dry_warnings = self.run_fixture(
+            files, games, True,
+        )
+        actual, remaining, real_calls, real_summary, renamed, real_warnings = self.run_fixture(
+            files, games, False,
+        )
         self.assertEqual(unchanged, files)
         self.assertEqual(dry_calls, 0)
         self.assertEqual(planned["renamed"], 0)
@@ -86,7 +104,98 @@ class RenameRomsTests(unittest.TestCase):
         for counter in ("processed", "skipped", "no_match"):
             self.assertEqual(planned[counter], actual[counter])
         self.assertEqual(real_calls, actual["renamed"] + actual["approximate"])
+        self.assertEqual(preview, renamed)
+        projected_files = dict(files)
+        for source, target in preview:
+            projected_files[target] = projected_files.pop(source)
+        self.assertEqual(projected_files, remaining)
+        for warnings in (dry_warnings, real_warnings):
+            self.assertEqual(any("Ambiguous CRC" in message for message in warnings), ambiguous)
         return planned, remaining
+
+    def test_shared_crc_uses_filename_evidence_in_either_dat_order(self):
+        payload = b"shared checksum"
+        crc = f"{zlib.crc32(payload):08X}"
+        games = [("Mario (USA)", [crc]), ("Zelda", [crc])]
+        for records in (games, games[::-1]):
+            for filename, title in (("mario (U).nes", "Mario (USA)"), ("zelda.nes", "Zelda")):
+                with self.subTest(records=records, filename=filename):
+                    stats, remaining = self.assert_preview_matches_run({filename: payload}, records)
+                    self.assertEqual(stats["planned_crc"], 1)
+                    self.assertEqual(stats["planned_approximate"], 0)
+                    self.assertEqual(remaining, {f"{title}.nes": payload})
+
+    def test_shared_crc_prefers_exact_title_over_normalized_title(self):
+        payload = b"shared checksum"
+        crc = f"{zlib.crc32(payload):08X}"
+        games = [("Final Fantasy 2", [crc]), ("Final Fantasy II", [crc])]
+        for records in (games, games[::-1]):
+            with self.subTest(records=records):
+                stats, remaining = self.assert_preview_matches_run(
+                    {"final fantasy 2.nes": payload}, records,
+                )
+                self.assertEqual(stats["planned_crc"], 1)
+                self.assertEqual(remaining, {"Final Fantasy 2.nes": payload})
+
+    def test_shared_crc_without_reliable_filename_is_left_unchanged(self):
+        payload = b"shared checksum"
+        crc = f"{zlib.crc32(payload):08X}"
+        games = [("Mario", [crc]), ("Zelda", [crc])]
+        for records in (games, games[::-1]):
+            for filename in ("Unknown.nes", "Mario a.nes"):
+                with self.subTest(records=records, filename=filename):
+                    files = {filename: payload}
+                    stats, remaining = self.assert_preview_matches_run(files, records, ambiguous=True)
+                    self.assertEqual(stats["no_match"], 1)
+                    self.assertEqual(stats["planned_crc"] + stats["planned_approximate"], 0)
+                    self.assertEqual(remaining, files)
+
+    def test_shared_crc_with_conflicting_normalized_titles_is_left_unchanged(self):
+        payload = b"shared checksum"
+        crc = f"{zlib.crc32(payload):08X}"
+        for filename, titles in (
+            ("final fantasy II (U).nes", ["Final Fantasy 2 (U)", "Final Fantasy II (USA)"]),
+            ("mario.nes", ["Mario", "MARIO"]),
+            ("mario (U).nes", ["Mario (U)", "MARIO (u)"]),
+        ):
+            for order in (titles, titles[::-1]):
+                with self.subTest(filename=filename, titles=order):
+                    files = {filename: payload}
+                    stats, remaining = self.assert_preview_matches_run(
+                        files, [(title, [crc]) for title in order], ambiguous=True,
+                    )
+                    self.assertEqual(stats["no_match"], 1)
+                    self.assertEqual(remaining, files)
+
+    def test_shared_crc_does_not_fall_back_to_an_unrelated_title(self):
+        payload = b"shared checksum"
+        crc = f"{zlib.crc32(payload):08X}"
+        files = {"Kirby a.nes": payload}
+        stats, remaining = self.assert_preview_matches_run(
+            files, {"Mario": [crc], "Zelda": [crc], "Kirby": []}, ambiguous=True,
+        )
+        self.assertEqual(stats["no_match"], 1)
+        self.assertEqual(remaining, files)
+
+    def test_repeated_crc_for_same_title_is_not_ambiguous(self):
+        payload = b"shared checksum"
+        crc = f"{zlib.crc32(payload):08X}"
+        stats, remaining = self.assert_preview_matches_run(
+            {"Unknown.nes": payload}, [("Mario", [crc, crc.lower()]), ("Mario", [crc])],
+        )
+        self.assertEqual(stats["planned_crc"], 1)
+        self.assertEqual(remaining, {"Mario.nes": payload})
+
+    def test_disambiguated_crc_reserves_the_preview_destination(self):
+        payload = b"shared checksum"
+        crc = f"{zlib.crc32(payload):08X}"
+        stats, remaining = self.assert_preview_matches_run(
+            {"Mario (U).nes": payload, "mario (USA).nes": payload},
+            {"Mario (USA)": [crc], "Zelda": [crc]},
+        )
+        self.assertEqual(stats["planned_crc"], 1)
+        self.assertEqual(stats["skipped"], 1)
+        self.assertEqual(remaining, {"Mario (USA).nes": payload, "mario (USA).nes": payload})
 
     def test_exact_crc_matches_unrelated_filename(self):
         payload = b"exact payload"
