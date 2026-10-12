@@ -325,6 +325,39 @@ class RenameRomsTests(unittest.TestCase):
             "Mario.nes": b"23", "Mario a.nes": b"second"
         })
 
+    def test_path_argument_processes_specified_directory(self):
+        """The -path flag processes ROMs in a directory other than CWD."""
+        with tempfile.TemporaryDirectory() as home_dir:
+            with tempfile.TemporaryDirectory() as roms_dir:
+                # Config lives in the home dir (CWD), not the ROMs dir
+                Path(home_dir, "config.json").write_text(json.dumps({"nes": "games.dat"}))
+                payload = b"source"
+                crc = f"{zlib.crc32(payload):08X}"
+                Path(roms_dir, "games.dat").write_text(
+                    f'game (\n name "Mario"\n rom ( name "part.nes" crc {crc} )\n)\n'
+                )
+                Path(roms_dir, "Unknown.nes").write_bytes(payload)
+
+                logger = Mock()
+                listdir = os.listdir
+                dependency = types.ModuleType("Levenshtein")
+                dependency.distance = levenshtein_distance
+                with patch.dict("sys.modules", {"Levenshtein": dependency}), \
+                        patch("sys.argv", ["script", f"-path={roms_dir}"]), \
+                        patch("os.listdir", side_effect=lambda path: sorted(listdir(path))), \
+                        patch("os.rename", wraps=os.rename) as rename, \
+                        patch("logging.basicConfig"), patch("logging.FileHandler"), \
+                        patch("logging.getLogger", return_value=logger), \
+                        patch("os.getcwd", return_value=home_dir):
+                    result = runpy.run_path(str(SCRIPT), run_name='__main__')
+
+                remaining = {p.name: p.read_bytes() for p in Path(roms_dir).glob("*.nes")}
+                self.assertEqual(result["stats"]["processed"], 1)
+                self.assertEqual(result["stats"]["renamed"], 1)
+                self.assertEqual(rename.call_count, 1)
+                self.assertIn("Mario.nes", remaining)
+                self.assertEqual(remaining["Mario.nes"], payload)
+
     def test_no_match_does_not_plan_rename(self):
         stats, remaining = self.assert_preview_matches_run(
             {"Unknown.nes": b"source"}, {"Mario": []}

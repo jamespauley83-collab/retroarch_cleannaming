@@ -175,11 +175,14 @@ def main():
     closest_distance_threshold = 10
     dry_run = False
     verbose = False
+    roms_path = os.getcwd()
 
     # Parse command line arguments
     for arg in sys.argv[1:]:
         if arg.startswith('-distance='):
             closest_distance_threshold = int(arg.split('=')[1])
+        elif arg.startswith('-path=') or arg.startswith('--path='):
+            roms_path = arg.split('=', 1)[1]
         elif arg in ('--dry-run', '-dry-run'):
             dry_run = True
         elif arg in ('--verbose', '-verbose', '-v'):
@@ -206,9 +209,6 @@ def main():
             config = json.load(config_file)
     else:
         config = DEFAULT_CONFIG
-
-    # Path to your ROM files
-    roms_path = os.getcwd()
 
     if dry_run:
         log.info('Dry-run mode enabled — no files will be renamed')
