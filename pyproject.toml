@@ -9,6 +9,28 @@ description = "Rename retro game ROM files to match libretro database naming con
 readme = "README.md"
 requires-python = ">=3.8"
 license = {text = "MIT"}
+authors = [
+    {name = "jamespauley83-collab", email = "258874465+jamespauley83-collab@users.noreply.github.com"},
+]
+keywords = ["retroarch", "rom", "retro", "gaming", "libretro", "rename"]
+classifiers = [
+    "Development Status :: 5 - Production/Stable",
+    "Environment :: Console",
+    "Intended Audience :: End Users/Desktop",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Topic :: Games/Entertainment",
+    "Topic :: Utilities",
+]
+dependencies = [
+    "python-Levenshtein",
+]
+
+[project.urls]
+Homepage = "https://github.com/jamespauley83-collab/retroarch_cleannaming"
+Repository = "https://github.com/jamespauley83-collab/retroarch_cleannaming"
+Issues = "https://github.com/jamespauley83-collab/retroarch_cleannaming/issues"
 
 [project.scripts]
 rename-roms = "rename_roms:main"

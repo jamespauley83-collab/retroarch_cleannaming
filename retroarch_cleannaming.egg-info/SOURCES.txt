@@ -7,6 +7,7 @@ retroarch_cleannaming.egg-info/PKG-INFO
 retroarch_cleannaming.egg-info/SOURCES.txt
 retroarch_cleannaming.egg-info/dependency_links.txt
 retroarch_cleannaming.egg-info/entry_points.txt
+retroarch_cleannaming.egg-info/requires.txt
 retroarch_cleannaming.egg-info/top_level.txt
 tests/test_preview_server.py
 tests/test_rename_roms.py
