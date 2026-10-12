@@ -36,3 +36,10 @@
 2026-10-12 23:42:17,724 [WARNING] No close match found for README.md
 2026-10-12 23:42:17,724 [INFO] Summary: 2 processed, 0 renamed (CRC), 0 renamed (approximate), 0 skipped, 2 no match
 2026-10-12 23:42:17,724 [INFO] Full log written to /app/rename_log.txt
+2026-10-12 23:51:06,361 [INFO] Dry-run mode enabled — no files will be renamed
+2026-10-12 23:51:06,408 [INFO] Processing: AGENTS.md (normalized: agents)
+2026-10-12 23:51:06,408 [WARNING] No close match found for AGENTS.md
+2026-10-12 23:51:06,454 [INFO] Processing: README.md (normalized: readme)
+2026-10-12 23:51:06,454 [WARNING] No close match found for README.md
+2026-10-12 23:51:06,455 [INFO] Summary: 2 processed, 0 renamed (CRC), 0 renamed (approximate), 0 planned (CRC), 0 planned (approximate), 0 skipped, 2 no match
+2026-10-12 23:51:06,455 [INFO] Full log written to /app/rename_log.txt
