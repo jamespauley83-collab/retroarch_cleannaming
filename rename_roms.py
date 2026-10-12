@@ -62,25 +62,46 @@ if dry_run:
     log.info('Dry-run mode enabled — no files will be renamed')
 
 def parse_dat_file(dat_file_path, filter_prefix):
+    """Return CRC-to-title sets and prefix-filtered names from a clrmamepro DAT."""
+    crc_map = {}
     name_map = {}
-    game_block = []
-    in_game_block = False
+    blocks = []
+    key = None
+    game_name = None
+    game_crcs = []
+    # Quoted names may contain parentheses; only bare parentheses delimit blocks.
+    tokens = re.compile(r'"(?:\\.|[^"\\])*"|[()]|[^\s()"]+')
     with open(dat_file_path, 'r', encoding='utf-8') as file:
         for line in file:
-            if 'game (' in line:
-                in_game_block = True
-                game_block = [line]
-            elif in_game_block:
-                game_block.append(line)
-                if ')' in line:
-                    in_game_block = False
-                    game_block_content = ''.join(game_block)
-                    game_name_match = re.search(r'name "(.+?)"', game_block_content)
-                    if game_name_match:
-                        game_name = game_name_match.group(1)
+            for token in tokens.findall(line):
+                if token == '(':
+                    blocks.append(key)
+                    key = None
+                    if blocks == ['game']:
+                        game_name = None
+                        game_crcs = []
+                elif token == ')':
+                    if blocks == ['game'] and game_name:
+                        for crc in game_crcs:
+                            crc_map.setdefault(crc, set()).add(game_name)
                         if game_name.lower().startswith(filter_prefix.lower()):
                             name_map[game_name.lower().strip()] = game_name
-    return name_map
+                    if blocks:
+                        blocks.pop()
+                    key = None
+                elif key is None:
+                    key = token
+                else:
+                    value = token
+                    if token.startswith('"'):
+                        value = re.sub(r'\\(["\\])', r'\1', token[1:-1])
+                    if blocks == ['game'] and key == 'name':
+                        game_name = value
+                    elif blocks == ['game', 'rom'] and key == 'crc':
+                        if re.fullmatch(r'[0-9a-fA-F]{1,8}', value):
+                            game_crcs.append(value.upper().zfill(8))
+                    key = None
+    return crc_map, name_map
 
 def get_crc32(filepath):
     prev = 0
@@ -133,6 +154,26 @@ def normalize_name(name):
     # Return the normalized name
     return name.lower().strip()
 
+def resolve_crc_title(titles, filename_stem):
+    """Choose a unique CRC title, requiring filename evidence for shared CRCs.
+
+    Prefer a literal title match before applying the existing name normalization.
+    Never break ties by DAT order or fuzzy distance: shared ROM data alone cannot
+    identify a game, and normalization can collapse distinct titles.
+    """
+    if len(titles) == 1:
+        return next(iter(titles))
+    exact = [title for title in titles
+             if title.lower().strip() == filename_stem.lower().strip()]
+    if exact:
+        return exact[0] if len(exact) == 1 else None
+    normalized_stem = normalize_name(filename_stem)
+    normalized = [title for title in titles
+                  if normalize_name(title) == normalized_stem]
+    if len(normalized) == 1:
+        return normalized[0]
+    return None
+
 def extract_number_from_name(name):
     match = re.search(r'\d+', name)
     if match:
@@ -160,12 +201,20 @@ for extension, filenames in files_by_extension.items():
         stats['processed'] += 1
         filepath = os.path.join(roms_path, filename)
         filter_prefix = filename[:3]  # Use the first three letters for filtering
-        name_map = parse_dat_file(dat_file_path, filter_prefix)
-        log.debug(f'Loaded {len(name_map)} database entries matching prefix "{filter_prefix}"')
+        crc_map, name_map = parse_dat_file(dat_file_path, filter_prefix)
+        log.debug(f'Loaded {len(crc_map)} CRC entries and {len(name_map)} names matching prefix "{filter_prefix}"')
         crc = get_crc32(filepath)
         log.debug(f'CRC32 for {filename}: {crc}')
-        if crc in name_map:
-            new_name = f"{name_map[crc]}.{extension}"
+        if crc in crc_map:
+            title = resolve_crc_title(crc_map[crc], filename.rsplit('.', 1)[0])
+            if title is None:
+                log.warning(
+                    f'Ambiguous CRC {crc} for {filename}: '
+                    f'{", ".join(sorted(crc_map[crc]))}; leaving file unchanged'
+                )
+                stats['no_match'] += 1
+                continue
+            new_name = f"{title}.{extension}"
             new_name = correct_region_tag(new_name)
             new_filepath = os.path.join(roms_path, new_name)
             if not destination_exists(new_filepath):
