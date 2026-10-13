@@ -6,19 +6,42 @@ import sys
 import logging
 from Levenshtein import distance
 
+USAGE = (
+    'usage: rename_roms.py [--apply] [--approximate] [--distance=N] [--roms=DIR] [--verbose]\n'
+    '       rename_roms.py --undo [--roms=DIR]\n'
+    'Previews renames unless --apply is given. Fuzzy name matches are only used with --approximate.'
+)
+
 # Default closest distance
 closest_distance_threshold = 10
-dry_run = False
+dry_run = True
+approximate = False
+undo = False
 verbose = False
+roms_path = os.path.dirname(os.path.realpath(__file__))
 
-# Parse command line arguments
+# Parse command line arguments; reject anything unknown so a typo never renames files.
 for arg in sys.argv[1:]:
-    if arg.startswith('-distance='):
-        closest_distance_threshold = int(arg.split('=')[1])
+    if arg.startswith(('-distance=', '--distance=')):
+        closest_distance_threshold = int(arg.split('=', 1)[1])
+    elif arg.startswith('--roms='):
+        roms_path = os.path.realpath(arg.split('=', 1)[1])
     elif arg in ('--dry-run', '-dry-run'):
         dry_run = True
+    elif arg == '--apply':
+        dry_run = False
+    elif arg == '--approximate':
+        approximate = True
+    elif arg == '--undo':
+        undo = True
     elif arg in ('--verbose', '-verbose', '-v'):
         verbose = True
+    else:
+        sys.exit(f'Unknown option: {arg}\n{USAGE}')
+
+# The tool's own files share extensions with ROM formats (e.g. .md for Mega Drive).
+PROJECT_FILES = {'README.md', 'AGENTS.md', 'config.json', 'requirements.txt'}
+undo_path = os.path.join(roms_path, 'rename_undo.json')
 
 # --- Logging setup: writes to both console and a log file ---
 log_file_path = os.path.join(os.path.dirname(os.path.realpath(__file__)), 'rename_log.txt')
@@ -55,11 +78,42 @@ config_path = os.path.join(os.path.dirname(os.path.realpath(__file__)), 'config.
 with open(config_path, 'r', encoding='utf-8') as config_file:
     config = json.load(config_file)
 
-# Path to your ROM files
-roms_path = os.path.dirname(os.path.realpath(__file__))
+dat_root = os.path.dirname(os.path.realpath(__file__))
+
+if undo:
+    with open(undo_path, 'r', encoding='utf-8') as undo_file:
+        renames = json.load(undo_file)
+    restored = 0
+    for entry in reversed(renames):
+        source = os.path.join(roms_path, entry['from'])
+        target = os.path.join(roms_path, entry['to'])
+        if os.path.exists(target) and not os.path.exists(source):
+            os.rename(target, source)
+            restored += 1
+            log.info(f'Restored: {entry["to"]} -> {entry["from"]}')
+        else:
+            log.warning(f'Cannot restore {entry["to"]} -> {entry["from"]}; left unchanged')
+    os.remove(undo_path)
+    log.info(f'Undo: {restored} of {len(renames)} rename(s) restored')
+    sys.exit(0)
 
 if dry_run:
-    log.info('Dry-run mode enabled — no files will be renamed')
+    log.info('Preview only — no files will be renamed. Run with --apply to rename.')
+if not approximate:
+    log.info('Fuzzy name matches are reported but not used. Add --approximate to use them.')
+
+applied_renames = []
+if not dry_run and os.path.exists(undo_path):
+    # Keep earlier runs undoable; --undo reverses them newest first.
+    with open(undo_path, 'r', encoding='utf-8') as undo_file:
+        applied_renames = json.load(undo_file)
+
+def rename_file(filepath, new_filepath):
+    os.rename(filepath, new_filepath)
+    applied_renames.append({'from': os.path.basename(filepath), 'to': os.path.basename(new_filepath)})
+    # Rewrite after every rename so an interrupted run can still be undone.
+    with open(undo_path, 'w', encoding='utf-8') as undo_file:
+        json.dump(applied_renames, undo_file, indent=1)
 
 def parse_dat_file(dat_file_path, filter_prefix):
     """Return CRC-to-title sets and prefix-filtered names from a clrmamepro DAT."""
@@ -184,7 +238,7 @@ def extract_number_from_name(name):
 files_by_extension = {}
 for filename in os.listdir(roms_path):
     filepath = os.path.join(roms_path, filename)
-    if os.path.isfile(filepath):
+    if os.path.isfile(filepath) and filename not in PROJECT_FILES:
         extension = filename.split('.')[-1].lower()
         if extension in config:
             if extension not in files_by_extension:
@@ -193,7 +247,7 @@ for filename in os.listdir(roms_path):
 
 # Process files by extension
 for extension, filenames in files_by_extension.items():
-    dat_file_path = os.path.join(roms_path, config[extension])
+    dat_file_path = os.path.join(dat_root, config[extension])
     log.debug(f'Extension .{extension}: {len(filenames)} file(s) found, database: {config[extension]}')
     
     # Process each file
@@ -223,7 +277,7 @@ for extension, filenames in files_by_extension.items():
                     stats['planned_crc'] += 1
                     log.info(f'[DRY-RUN] Would rename: {filename} -> {new_name} (CRC match)')
                 else:
-                    os.rename(filepath, new_filepath)
+                    rename_file(filepath, new_filepath)
                     stats['renamed'] += 1
                     log.info(f'Renamed: {filename} -> {new_name} (CRC match)')
             else:
@@ -239,7 +293,8 @@ for extension, filenames in files_by_extension.items():
 
             for db_name in name_map.keys():
                 db_name_number = extract_number_from_name(db_name)
-                if filename_number and db_name_number and filename_number != db_name_number:
+                # A number in only one name (e.g. "Final Fight 3" vs "Final Fight") is a different game.
+                if filename_number != db_name_number:
                     continue
                 current_distance = distance(norm_filename, db_name)
                 log.debug(f'  Candidate: {name_map[db_name]} (distance={current_distance})')
@@ -247,7 +302,13 @@ for extension, filenames in files_by_extension.items():
                     closest_distance = current_distance
                     closest_match = name_map[db_name]
 
-            if closest_match and closest_distance < closest_distance_threshold:  # Use the threshold from the command line or default
+            if closest_match and closest_distance < closest_distance_threshold and not approximate:
+                log.warning(
+                    f'Possible match for {filename}: {closest_match} '
+                    f'(distance={closest_distance}); add --approximate to use it'
+                )
+                stats['no_match'] += 1
+            elif closest_match and closest_distance < closest_distance_threshold:
                 new_name = f"{closest_match}.{extension}"
                 new_name = correct_region_tag(new_name)
                 new_filepath = os.path.join(roms_path, new_name)
@@ -257,7 +318,7 @@ for extension, filenames in files_by_extension.items():
                         stats['planned_approximate'] += 1
                         log.info(f'[DRY-RUN] Would rename: {filename} -> {new_name} (approximate match, distance={closest_distance})')
                     else:
-                        os.rename(filepath, new_filepath)
+                        rename_file(filepath, new_filepath)
                         stats['approximate'] += 1
                         log.info(f'Renamed: {filename} -> {new_name} (approximate match, distance={closest_distance})')
                 else:

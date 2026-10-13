@@ -10,10 +10,12 @@ This is a CLI Python script (`rename_roms.py`) that renames retro game ROM files
 
 ## Running
 ```
-python3 rename_roms.py           # default distance threshold of 10
-python3 rename_roms.py -distance=15   # custom fuzzy match distance
+python3 rename_roms.py                          # preview only (default)
+python3 rename_roms.py --apply                  # rename CRC matches
+python3 rename_roms.py --apply --approximate    # also use fuzzy name matches (--distance=N, default 10)
+python3 rename_roms.py --undo                   # reverse applied renames from rename_undo.json
 ```
-ROM files must be placed in the working directory (`/app` inside the container). The script matches by CRC32 first, then falls back to Levenshtein fuzzy matching.
+ROM files go in the working directory (`/app` inside the container) or a folder passed with `--roms=DIR`. Unknown options stop the script. The script matches by CRC32; Levenshtein fuzzy matches are only used with `--approximate`, and never when a number appears in only one of the two names.
 
 ## Docker Environment
 - `docker-compose.base44.yml` runs a `python:3.12-slim` container with the source bind-mounted at `/app`.

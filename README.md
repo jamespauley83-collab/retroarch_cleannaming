@@ -29,17 +29,25 @@ Just add the new extensions you want, and the libretro dataset you want to use
 ```
 
 # Usage
-Put all the ROMs in the current directory, and run the scripts
-
-# Run
+Put all the ROMs in the current directory (or pass `--roms=DIR`). Running the script on its own only previews what it would rename:
 ```
 python3 rename_roms.py
 ```
+When the preview looks right, rename for real:
+```
+python3 rename_roms.py --apply
+```
+Every applied rename is recorded in `rename_undo.json` in the ROM folder. To put the old names back:
+```
+python3 rename_roms.py --undo
+```
+
 # parameters
-You can change the matching distance by adding this parameter and change the value, more the number is higher more the approx will be
+By default only exact CRC matches are renamed. To also use fuzzy name matching, add `--approximate`; `--distance=N` sets how loose it may be (default 10, higher is looser). Fuzzy matches never pair names where only one contains a number, such as "Final Fight 3" and "Final Fight".
 ```
-python3 rename_roms.py -distance=10
+python3 rename_roms.py --approximate --distance=10
 ```
+Unknown options stop the script before anything is renamed.
 
 # Results
 The ROMs will be renamed according to the database of libretro

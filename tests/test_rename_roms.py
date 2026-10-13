@@ -57,7 +57,7 @@ class RenameRomsTests(unittest.TestCase):
             dependency.distance = levenshtein_distance
             # Use the same deterministic input order in simulated and real runs.
             with patch.dict("sys.modules", {"Levenshtein": dependency}), \
-                    patch("sys.argv", [str(script)] + (["--dry-run"] if dry_run else [])), \
+                    patch("sys.argv", [str(script), "--approximate"] + ([] if dry_run else ["--apply"])), \
                     patch("os.listdir", side_effect=lambda path: sorted(listdir(path))), \
                     patch("os.rename", wraps=os.rename) as rename, \
                     patch("logging.basicConfig"), patch("logging.FileHandler"), \
@@ -331,6 +331,95 @@ class RenameRomsTests(unittest.TestCase):
         self.assertEqual(stats["no_match"], 1)
         self.assertEqual(stats["planned_crc"] + stats["planned_approximate"], 0)
         self.assertEqual(remaining, {"Unknown.nes": b"source"})
+
+
+class SafetyTests(unittest.TestCase):
+    """Renames happen only when asked for, and can be reversed."""
+
+    def run_script(self, root, args, games=None, files=None, config=None):
+        script = root / "rename_roms.py"
+        shutil.copyfile(SCRIPT, script)
+        (root / "config.json").write_text(json.dumps(config or {"nes": "games.dat"}))
+        (root / "games.dat").write_text("".join(
+            f'game ( name "{title}" )\n' for title in (games or [])
+        ))
+        for filename, contents in (files or {}).items():
+            (root / filename).write_bytes(contents)
+        dependency = types.ModuleType("Levenshtein")
+        dependency.distance = levenshtein_distance
+        logger = Mock()
+        with patch.dict("sys.modules", {"Levenshtein": dependency}), \
+                patch("sys.argv", [str(script)] + args), \
+                patch("logging.basicConfig"), patch("logging.FileHandler"), \
+                patch("logging.getLogger", return_value=logger):
+            try:
+                runpy.run_path(str(script))
+            except SystemExit as exit:
+                if exit.code not in (None, 0):
+                    raise
+        return logger
+
+    def names(self, root, pattern="*.nes"):
+        return sorted(path.name for path in root.glob(pattern))
+
+    def test_default_run_only_previews(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.run_script(root, ["--approximate"], ["Mario"], {"Mario a.nes": b"x"})
+            self.assertEqual(self.names(root), ["Mario a.nes"])
+
+    def test_unknown_option_stops_before_renaming(self):
+        for option in ("--dryrun", "-n", "--aply"):
+            with self.subTest(option=option), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                with self.assertRaises(SystemExit) as stopped:
+                    self.run_script(root, ["--apply", "--approximate", option],
+                                    ["Mario"], {"Mario a.nes": b"x"})
+                self.assertIn(option, str(stopped.exception.code))
+                self.assertEqual(self.names(root), ["Mario a.nes"])
+
+    def test_fuzzy_matches_need_approximate(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            logger = self.run_script(root, ["--apply"], ["Mario"], {"Mario a.nes": b"x"})
+            self.assertEqual(self.names(root), ["Mario a.nes"])
+            warnings = " ".join(call.args[0] for call in logger.warning.call_args_list)
+            self.assertIn("add --approximate", warnings)
+
+    def test_number_in_only_one_name_is_not_a_match(self):
+        for filename, title in (("Final Fight 3.nes", "Final Fight (USA)"),
+                                ("Sonic.nes", "Sonic 3 (Europe)")):
+            with self.subTest(filename=filename), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                self.run_script(root, ["--apply", "--approximate", "--distance=30"],
+                                [title], {filename: b"x"})
+                self.assertEqual(self.names(root), [filename])
+
+    def test_project_files_are_never_treated_as_roms(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.run_script(root, ["--apply", "--approximate", "--distance=30"],
+                            ["Agent Hugo (Europe)", "README (USA)"],
+                            {"README.md": b"docs", "AGENTS.md": b"docs"},
+                            {"md": "games.dat"})
+            self.assertEqual(self.names(root, "*.md"), ["AGENTS.md", "README.md"])
+
+    def test_undo_restores_applied_renames(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.run_script(root, ["--apply", "--approximate"], ["Mario", "Zelda"],
+                            {"Mario a.nes": b"1", "Zelda b.nes": b"2"})
+            self.assertEqual(self.names(root), ["Mario.nes", "Zelda.nes"])
+            self.run_script(root, ["--undo"])
+            self.assertEqual(self.names(root), ["Mario a.nes", "Zelda b.nes"])
+            self.assertFalse((root / "rename_undo.json").exists())
+
+    def test_roms_folder_can_be_outside_the_tool(self):
+        with tempfile.TemporaryDirectory() as tool, tempfile.TemporaryDirectory() as roms:
+            (Path(roms) / "Mario a.nes").write_bytes(b"x")
+            self.run_script(Path(tool), ["--apply", "--approximate", f"--roms={roms}"], ["Mario"])
+            self.assertEqual(self.names(Path(roms)), ["Mario.nes"])
+            self.assertTrue((Path(roms) / "rename_undo.json").exists())
 
 
 if __name__ == "__main__":

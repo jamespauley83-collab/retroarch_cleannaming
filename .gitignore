@@ -1,2 +1,4 @@
 __pycache__/
 *.pyc
+rename_log.txt
+rename_undo.json
