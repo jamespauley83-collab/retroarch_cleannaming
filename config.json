@@ -10,8 +10,23 @@
   "n64": "libretro-database/metadat/no-intro/Nintendo - Nintendo 64.dat",
   "v64": "libretro-database/metadat/no-intro/Nintendo - Nintendo 64.dat",
   "nds": "libretro-database/metadat/no-intro/Nintendo - Nintendo DS.dat",
-  "iso": "libretro-database/metadat/no-intro/Sony - PlayStation Portable.dat",
   "gen": "libretro-database/metadat/no-intro/Sega - Mega Drive - Genesis.dat",
-  "chd": "libretro-database/metadat/developer/Sony - PlayStation.dat",
-  "sbi": "libretro-database/metadat/developer/Sony - PlayStation.dat"
+  "systems": {
+    "ps2": {
+      "dat": "libretro-database/metadat/redump/Sony - PlayStation 2.dat",
+      "extensions": ["iso", "chd"]
+    },
+    "psp": {
+      "dat": "libretro-database/metadat/no-intro/Sony - PlayStation Portable.dat",
+      "extensions": ["iso", "cso"]
+    },
+    "psx": {
+      "dat": "libretro-database/metadat/redump/Sony - PlayStation.dat",
+      "extensions": ["iso", "chd"]
+    },
+    "gamecube": {
+      "dat": "libretro-database/metadat/redump/Nintendo - GameCube.dat",
+      "extensions": ["iso", "gcm", "rvz"]
+    }
+  }
 }

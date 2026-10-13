@@ -4,31 +4,117 @@ import json
 import zlib
 import sys
 import logging
+import argparse
 from Levenshtein import distance
 
-# Default closest distance
-closest_distance_threshold = 10
-dry_run = False
-verbose = False
+script_path = os.path.dirname(os.path.realpath(__file__))
+parser = argparse.ArgumentParser(
+    description='Rename ROMs using a console-specific DAT. Preview first with --dry-run.',
+    allow_abbrev=False,
+)
+parser.add_argument('--system', type=str.lower,
+                    help='Console profile in config.json: ps2, psp, psx, or gamecube')
+parser.add_argument('--roms-dir', default=script_path,
+                    help='One console directory to scan (non-recursive; default: script directory)')
+parser.add_argument('--config', default=os.path.join(script_path, 'config.json'),
+                    help='Configuration file; relative DAT paths are resolved beside this file')
+parser.add_argument('--distance', '-distance', type=int, default=10,
+                    help='Exclusive fuzzy-distance threshold (default: 10; 0 disables fuzzy matching)')
+parser.add_argument('--dry-run', '-dry-run', action='store_true',
+                    help='Print planned renames without renaming files or writing a log file')
+parser.add_argument('--verbose', '-verbose', '-v', action='store_true')
+args = parser.parse_args()
+closest_distance_threshold = args.distance
+dry_run = args.dry_run
+verbose = args.verbose
+if closest_distance_threshold < 0:
+    parser.error('--distance must be non-negative')
 
-# Parse command line arguments
-for arg in sys.argv[1:]:
-    if arg.startswith('-distance='):
-        closest_distance_threshold = int(arg.split('=')[1])
-    elif arg in ('--dry-run', '-dry-run'):
-        dry_run = True
-    elif arg in ('--verbose', '-verbose', '-v'):
-        verbose = True
+# Disc/container extensions do not identify a console. This guard also applies
+# to legacy flat configs, so an old iso -> PSP mapping cannot silently return.
+SYSTEM_REQUIRED_EXTENSIONS = {
+    'iso', 'chd', 'cso', 'gcm', 'rvz', 'wbfs', 'bin', 'cue', 'img', 'mdf',
+    'nrg', 'cdi', 'pbp', 'sbi',
+}
+# Companion files must keep their names in sync with their images. Multi-file
+# disc sets and sidecars are outside the single-file rename workflow.
+UNSUPPORTED_COMPANION_EXTENSIONS = {'bin', 'cue', 'sbi', 'm3u'}
+PROJECT_MARKDOWN_FILES = {'README.md', 'AGENTS.md'}
+config_path = os.path.abspath(args.config)
+config_directory = os.path.dirname(config_path)
+roms_path = os.path.abspath(args.roms_dir)
+if not os.path.isdir(roms_path):
+    parser.error(f'ROM directory does not exist: {roms_path}')
+try:
+    with open(config_path, 'r', encoding='utf-8') as config_file:
+        config = json.load(config_file)
+    if not isinstance(config, dict):
+        raise ValueError('configuration must be an object')
+    systems = config.get('systems', {})
+    if not isinstance(systems, dict):
+        raise ValueError('systems must be an object')
+    default_mapping = {ext: dat for ext, dat in config.items() if ext != 'systems'}
+    if any(not isinstance(dat, str) or not dat for dat in default_mapping.values()):
+        raise ValueError('extension mappings must contain non-empty DAT paths')
+    system_extensions = set(SYSTEM_REQUIRED_EXTENSIONS)
+    for system, profile in systems.items():
+        if (not isinstance(profile, dict) or
+                not isinstance(profile.get('dat'), str) or not profile['dat'] or
+                not isinstance(profile.get('extensions'), list) or not profile['extensions'] or
+                any(not isinstance(ext, str) or not re.fullmatch(r'[a-z0-9]+', ext)
+                    for ext in profile['extensions'])):
+            raise ValueError(f'invalid system profile: {system}')
+        system_extensions.update(profile['extensions'])
+    if args.system:
+        if args.system not in systems:
+            raise ValueError(f'unknown system {args.system!r}; available: {", ".join(sorted(systems))}')
+        profile = systems[args.system]
+        # A selected profile replaces defaults; it never falls back to another DAT.
+        extension_mapping = {ext: profile['dat'] for ext in profile['extensions']
+                             if ext not in UNSUPPORTED_COMPANION_EXTENSIONS}
+    else:
+        extension_mapping = {ext: dat for ext, dat in default_mapping.items()
+                             if ext not in system_extensions and
+                             ext not in UNSUPPORTED_COMPANION_EXTENSIONS}
+except (OSError, ValueError) as error:
+    parser.error(f'Unable to load configuration: {error}')
 
-# --- Logging setup: writes to both console and a log file ---
-log_file_path = os.path.join(os.path.dirname(os.path.realpath(__file__)), 'rename_log.txt')
+# Preflight before opening a log or renaming anything. A missing selected DAT
+# is an error, never a reason to try a different console's database.
+files_by_extension = {}
+blocked_files = []
+for filename in sorted(os.listdir(roms_path)):
+    filepath = os.path.join(roms_path, filename)
+    if (not os.path.isfile(filepath) or os.path.islink(filepath) or
+            filename in PROJECT_MARKDOWN_FILES):
+        continue
+    extension = filename.rsplit('.', 1)[-1].lower()
+    if extension in extension_mapping:
+        files_by_extension.setdefault(extension, []).append(filename)
+    elif not args.system and extension in system_extensions:
+        blocked_files.append(filename)
+
+dat_paths = {ext: os.path.join(config_directory, dat)
+             for ext, dat in extension_mapping.items()}
+required_dats = set(dat_paths.values()) if args.system else {
+    dat_paths[ext] for ext in files_by_extension
+}
+for dat_file_path in sorted(required_dats):
+    try:
+        with open(dat_file_path, 'r', encoding='utf-8'):
+            pass
+    except OSError as error:
+        parser.error(f'Cannot read selected DAT {dat_file_path}: {error}')
+
+# Dry runs only write to stdout. Applying renames retains the existing log.
+log_file_path = os.path.join(script_path, 'rename_log.txt')
+handlers = [logging.StreamHandler(sys.stdout)]
+if not dry_run:
+    handlers.append(logging.FileHandler(log_file_path, encoding='utf-8'))
 logging.basicConfig(
     level=logging.DEBUG if verbose else logging.INFO,
     format='%(asctime)s [%(levelname)s] %(message)s',
-    handlers=[
-        logging.StreamHandler(sys.stdout),
-        logging.FileHandler(log_file_path, encoding='utf-8'),
-    ],
+    handlers=handlers,
 )
 log = logging.getLogger(__name__)
 
@@ -50,16 +136,12 @@ def plan_rename(filepath, new_filepath):
     projected_destinations.add(new_filepath)
     projected_sources.discard(new_filepath)
 
-# Load configuration from JSON file
-config_path = os.path.join(os.path.dirname(os.path.realpath(__file__)), 'config.json')
-with open(config_path, 'r', encoding='utf-8') as config_file:
-    config = json.load(config_file)
-
-# Path to your ROM files
-roms_path = os.path.dirname(os.path.realpath(__file__))
-
 if dry_run:
-    log.info('Dry-run mode enabled — no files will be renamed')
+    log.info('Dry-run mode enabled — no files will be renamed; no log file will be written')
+log.info(f'System: {args.system or "extension defaults (disc images require --system)"}; directory: {roms_path}')
+for filename in blocked_files:
+    log.warning(f'Skipping: {filename}; console is ambiguous — select --system and a single-console --roms-dir')
+    stats['skipped'] += 1
 
 def parse_dat_file(dat_file_path, filter_prefix):
     """Return CRC-to-title sets and prefix-filtered names from a clrmamepro DAT."""
@@ -180,21 +262,10 @@ def extract_number_from_name(name):
         return match.group(0)
     return None
 
-# Gather all files by extension
-files_by_extension = {}
-for filename in os.listdir(roms_path):
-    filepath = os.path.join(roms_path, filename)
-    if os.path.isfile(filepath):
-        extension = filename.split('.')[-1].lower()
-        if extension in config:
-            if extension not in files_by_extension:
-                files_by_extension[extension] = []
-            files_by_extension[extension].append(filename)
-
 # Process files by extension
 for extension, filenames in files_by_extension.items():
-    dat_file_path = os.path.join(roms_path, config[extension])
-    log.debug(f'Extension .{extension}: {len(filenames)} file(s) found, database: {config[extension]}')
+    dat_file_path = dat_paths[extension]
+    log.info(f'Extension .{extension}: {len(filenames)} file(s) found, database: {dat_file_path}')
     
     # Process each file
     for filename in filenames:
@@ -280,4 +351,5 @@ log.info(
     f'{stats["skipped"]} skipped, '
     f'{stats["no_match"]} no match'
 )
-log.info(f'Full log written to {log_file_path}')
+if not dry_run:
+    log.info(f'Full log written to {log_file_path}')
