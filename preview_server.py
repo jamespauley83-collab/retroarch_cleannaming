@@ -121,11 +121,13 @@ def build_status_page():
 
     html += """    <p class="label">Run the tool inside the container:</p>
     <div class="cmd"><span class="prompt">$</span> docker compose -f docker-compose.base44.yml exec app python3 rename_roms.py</div>
-    <div class="cmd"><span class="prompt">$</span> docker compose -f docker-compose.base44.yml exec app python3 rename_roms.py -distance=15</div>
+    <div class="cmd"><span class="prompt">$</span> docker compose -f docker-compose.base44.yml exec app python3 rename_roms.py --apply</div>
+    <div class="cmd"><span class="prompt">$</span> docker compose -f docker-compose.base44.yml exec app python3 rename_roms.py --undo</div>
 
     <p class="note">
       Place ROM files in the <code>/app</code> directory (the repo root), then run the command above.
-      The script matches by CRC32 first, then falls back to Levenshtein fuzzy matching.
+      The first command previews; <code>--apply</code> renames and <code>--undo</code> reverses the last applied renames.
+      The script matches by CRC32; fuzzy name matches are only used with <code>--approximate</code>.
       This page is a status dashboard — the actual tool runs in the terminal.
     </p>
   </div>
