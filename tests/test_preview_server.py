@@ -124,6 +124,19 @@ class PreviewServerTests(unittest.TestCase):
         self.assertIn(escape(extension), page)
         self.assertNotIn("img", ParsedPage(page).tags)
 
+    def test_console_profiles_list_extensions_and_safe_preview_commands(self):
+        self.config.write_text(json.dumps({'nes': 'nes.dat', 'systems': {
+            'ps2': {'dat': 'ps2.dat', 'extensions': ['iso', 'chd']}}}))
+        self.make_files('Racer.iso', 'Racer.chd', 'Mario.nes', 'ignored.systems')
+
+        page = preview_server.build_status_page()
+
+        self.assert_rom_count(page, 3)
+        self.assertCountEqual(ParsedPage(page).items, ['Racer.iso', 'Racer.chd', 'Mario.nes'])
+        self.assertIn('chd, iso, nes', page)
+        self.assertIn('--system ps2 --roms-dir /app/roms/PS2 --dry-run', page)
+        self.assertNotIn('rename_roms.py</div>', page)
+
 
 if __name__ == "__main__":
     unittest.main()

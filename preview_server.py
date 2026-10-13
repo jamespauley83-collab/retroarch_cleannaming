@@ -31,7 +31,10 @@ def build_status_page():
     try:
         with open(CONFIG_PATH, "r", encoding="utf-8") as f:
             config = json.load(f)
-        extensions = ", ".join(sorted(config.keys()))
+        configured_extensions = set(config) - {'systems'}
+        for profile in config.get('systems', {}).values():
+            configured_extensions.update(profile['extensions'])
+        extensions = ", ".join(sorted(configured_extensions))
     except Exception:
         extensions = "(unable to read config.json)"
 
@@ -44,7 +47,7 @@ def build_status_page():
                 fp = os.path.join(os.path.dirname(os.path.realpath(__file__)), fn)
                 if os.path.isfile(fp):
                     ext = fn.split(".")[-1].lower()
-                    if ext in config and fn not in PROJECT_MARKDOWN_FILES:
+                    if ext in configured_extensions and fn not in PROJECT_MARKDOWN_FILES:
                         rom_count += 1
                         if len(rom_files) < 10:
                             rom_files.append(fn)
@@ -119,12 +122,14 @@ def build_status_page():
             html += f"        <li>… and {rom_count - len(rom_files)} more</li>\n"
         html += "      </ul>\n    </div>\n"
 
-    html += """    <p class="label">Run the tool inside the container:</p>
-    <div class="cmd"><span class="prompt">$</span> docker compose -f docker-compose.base44.yml exec app python3 rename_roms.py</div>
-    <div class="cmd"><span class="prompt">$</span> docker compose -f docker-compose.base44.yml exec app python3 rename_roms.py -distance=15</div>
+    html += """    <p class="label">Preview from inside the container:</p>
+    <div class="cmd"><span class="prompt">$</span> docker compose -f docker-compose.base44.yml exec app python3 rename_roms.py --dry-run</div>
+    <div class="cmd"><span class="prompt">$</span> docker compose -f docker-compose.base44.yml exec app python3 rename_roms.py --system ps2 --roms-dir /app/roms/PS2 --dry-run</div>
 
     <p class="note">
-      Place ROM files in the <code>/app</code> directory (the repo root), then run the command above.
+      Use <code>--roms-dir</code> to select an existing single-console directory visible inside the container.
+      Disc images require <code>--system ps2|psp|psx|gamecube</code>; extensions alone cannot identify a console.
+      Preview commands do not rename files or write a log. Scanning is non-recursive.
       The script matches by CRC32 first, then falls back to Levenshtein fuzzy matching.
       This page is a status dashboard — the actual tool runs in the terminal.
     </p>
