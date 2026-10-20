@@ -10,11 +10,13 @@ This is a CLI Python script (`rename_roms.py`) that renames retro game ROM files
 
 ## Running
 ```
-python3 rename_roms.py --dry-run           # preview cartridge defaults
-python3 rename_roms.py --system ps2 --roms-dir /path/to/PS2 --dry-run
-python3 rename_roms.py --dry-run -distance=15   # custom fuzzy match distance
+python3 rename_roms.py                                      # preview only (default)
+python3 rename_roms.py --system ps2 --roms-dir /path/to/PS2   # console-specific preview
+python3 rename_roms.py --apply                              # rename CRC matches
+python3 rename_roms.py --apply --approximate                # also use fuzzy matches
+python3 rename_roms.py --undo --roms-dir /path/to/PS2         # reverse recorded renames
 ```
-Use `--roms-dir` to read an existing single-console directory non-recursively; the default is the script directory. Disc images require an explicit `--system` profile (`ps2`, `psp`, `psx`, or `gamecube`). The script matches by CRC32 first, then falls back to Levenshtein fuzzy matching within the selected DAT only. Dry runs do not write a log; omitting `--dry-run` applies renames.
+Use `--roms-dir` (or `--roms`) to scan one existing directory non-recursively; the default is the script directory. Disc images require an explicit `--system` profile (`ps2`, `psp`, `psx`, or `gamecube`). CRC matching and optional `--approximate` matching use only that profile's DAT. Fuzzy matching never pairs names when a number appears in only one name. Preview runs do not write a log; only `--apply` renames. Applied renames are recorded in the selected folder's `rename_undo.json`; `--undo` does not require the original DAT. Unknown, abbreviated, or conflicting operation flags stop the script.
 
 ## Docker Environment
 - `docker-compose.base44.yml` runs a `python:3.12-slim` container with the source bind-mounted at `/app`.

@@ -130,7 +130,8 @@ def build_status_page():
       Use <code>--roms-dir</code> to select an existing single-console directory visible inside the container.
       Disc images require <code>--system ps2|psp|psx|gamecube</code>; extensions alone cannot identify a console.
       Preview commands do not rename files or write a log. Scanning is non-recursive.
-      The script matches by CRC32 first, then falls back to Levenshtein fuzzy matching.
+      Preview is the default; only <code>--apply</code> renames. <code>--undo</code> reverses recorded renames in the same directory.
+      The script matches by CRC32; fuzzy matches require <code>--approximate</code>.
       This page is a status dashboard — the actual tool runs in the terminal.
     </p>
   </div>

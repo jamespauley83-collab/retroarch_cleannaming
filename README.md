@@ -1,7 +1,7 @@
 # RetroArch CleanNaming
 
 Rename ROM files to libretro database titles, using CRC32 first and approximate
-filename matching when no checksum matches. **Preview first with `--dry-run`.**
+filename matching with `--approximate` when no checksum matches. **Preview is the default; only `--apply` renames.**
 
 ## Setup
 
@@ -53,7 +53,9 @@ Without `--system`, shared disc formats are skipped, including when an older
 config still maps `iso` to PSP or `chd` to PlayStation. The script does not infer
 the console from folder names and never tries another console's DAT after a miss.
 
-To disable approximate suggestions for a stricter first preview, add `--distance 0`:
+By default only CRC matches are planned; possible fuzzy matches are reported but
+not used. Add `--approximate` to include fuzzy matches in a preview. To suppress
+fuzzy suggestions entirely, add `--distance 0`:
 
 ```powershell
 py -3 .\rename_roms.py --system ps2 --roms-dir "D:\ROMs\PS2" --dry-run --distance 0
@@ -61,13 +63,25 @@ py -3 .\rename_roms.py --system ps2 --roms-dir "D:\ROMs\PS2" --dry-run --distanc
 
 CHD, CSO, and RVZ are containers: their stored-file CRC32 generally differs from
 the checksum of the original dump in a DAT. This tool does not decompress or
-convert images. They will usually require approximate filename matching, which
+convert images. They usually require `--approximate` to plan filename matches, which
 is a suggestion to review and does not verify a dump. An unrecognized checksum
 or filename is not evidence that a game is damaged.
 
 Do not apply these previews to the original collection until you have reviewed
-and explicitly approved the results. **Omitting `--dry-run` performs renames** and
-writes `rename_log.txt` beside the script. The tool does not update playlists,
+and backed up the collection. **Only `--apply` performs renames** and writes
+`rename_log.txt` beside the script; omitting `--dry-run` still previews.
+For example, after reviewing a PS2 preview:
+
+```sh
+python3 rename_roms.py --system ps2 --roms-dir "/path/to/ROMs/PS2" --apply
+# Only if the approximate suggestions were also reviewed:
+python3 rename_roms.py --system ps2 --roms-dir "/path/to/ROMs/PS2" --apply --approximate
+```
+
+Each applied rename is recorded in `rename_undo.json` in the selected ROM folder.
+`python3 rename_roms.py --roms-dir "/path/to/ROMs/PS2" --undo` restores recorded
+filenames without needing the current DAT or `--system`. Keep that journal until
+you have checked the results. Undo does not restore other files or associations. The tool does not update playlists,
 CUE references, save names, save-state names, or RetroArch settings. A later ROM
 rename can break those associations even though their contents are untouched.
 BIN/CUE sets, SBI sidecars, and M3U playlists are therefore not renamed by this
@@ -124,12 +138,16 @@ For a cartridge-only preview:
 python3 rename_roms.py --roms-dir "/path/to/cartridge-ROMs" --dry-run
 ```
 
+`--roms` is an alias for `--roms-dir`, including the existing `--roms=DIR` form.
 If `--roms-dir` is omitted, the script directory is scanned, preserving the
 previous default. Repository `README.md` and `AGENTS.md` are excluded from Mega
 Drive `.md` detection. Keep project documents separate from ROM collections.
 
 ## Other options
 
+- `--apply`: apply renames; without this flag the script only previews.
+- `--approximate`: opt in to fuzzy matching; names with different numbers are excluded.
+- `--undo`: reverse recorded renames in the selected folder. Operation flags cannot be combined.
 - `--distance N` / `-distance=N`: exclusive approximate-match distance threshold;
   default 10. Higher values permit less similar suggestions. `0` disables fuzzy
   matching while retaining exact CRC matching.
@@ -160,5 +178,7 @@ Use a console-specific directory already visible inside the container:
 docker compose -f docker-compose.base44.yml exec app python3 rename_roms.py --system ps2 --roms-dir /app/roms/PS2 --dry-run
 ```
 
+For example, add `- /your/ROMs:/app/roms:ro` to the Compose service volumes
+for a read-only preview mount; `/app/roms` is not created automatically.
 Use an existing read-only ROM mount when previewing a collection in Docker. Do
 not copy your original collection into the repository just to use this command.

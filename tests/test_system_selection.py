@@ -25,7 +25,7 @@ CRC = f'{zlib.crc32(PAYLOAD):08X}'
 
 
 class SystemSelectionTests(unittest.TestCase):
-    def run_fixture(self, files, games, args=(), config=None, missing=()):
+    def run_fixture(self, files, games, args=(), config=None, missing=(), undo_after=False):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             app = root / 'app'
@@ -86,10 +86,24 @@ class SystemSelectionTests(unittest.TestCase):
                 renamed = [tuple(Path(p).name for p in call.args)
                            for call in rename.call_args_list]
                 log_file_calls = file_handler.call_count
+                undo_path = roms / 'rename_undo.json'
+                history = json.loads(undo_path.read_text()) if undo_path.exists() else None
+                restored = []
+                if undo_after:
+                    rename.reset_mock()
+                    # Undo must work independently of both console/DAT selection and
+                    # the config that was used for the applied rename.
+                    with patch('sys.argv', [str(script), '--undo', '--roms', str(roms),
+                                           '--config', str(settings / 'missing.json')]):
+                        with self.assertRaises(SystemExit) as stopped:
+                            runpy.run_path(str(script))
+                        self.assertEqual(stopped.exception.code, 0)
+                    restored = [tuple(Path(p).name for p in call.args)
+                                for call in rename.call_args_list]
 
             after = {str(p.relative_to(root)): (p.read_bytes(), p.stat().st_mtime_ns)
                      for p in root.rglob('*') if p.is_file()}
-            if '--dry-run' in args or error is not None:
+            if '--apply' not in args or error is not None:
                 self.assertEqual(before, after)
                 self.assertEqual(renamed, [])
                 self.assertEqual(log_file_calls, 0)
@@ -98,10 +112,12 @@ class SystemSelectionTests(unittest.TestCase):
                 output='\n'.join(str(call.args[0]) for call in logger.info.call_args_list),
                 warnings='\n'.join(str(call.args[0]) for call in logger.warning.call_args_list),
                 error=error, stderr=stderr.getvalue(), renamed=renamed,
+                history=history, restored=restored,
+                undo_exists=undo_path.exists(),
                 dats={Path(path).name for path in opened if path.endswith('.dat')},
                 rom_reads={Path(path).name for path in opened if str(roms) in path},
                 remaining={str(p.relative_to(roms)): p.read_bytes()
-                           for p in roms.rglob('*') if p.is_file()},
+                           for p in roms.rglob('*') if p.is_file() and p != undo_path},
             )
 
     def test_bundled_disc_mappings_require_system(self):
@@ -131,12 +147,13 @@ class SystemSelectionTests(unittest.TestCase):
             for extension in profile['extensions']:
                 for kind in ('CRC', 'approximate'):
                     with self.subTest(system=system, extension=extension, kind=kind):
-                        games = {key: [(f'Racer {key}', [CRC] if kind == 'CRC' else [])]
+                        games = {key: [(f'Racer {key.replace("2", "two")}', [CRC] if kind == 'CRC' else [])]
                                  for key in PROFILES}
                         files = {f'Racer a.{extension.upper()}': PAYLOAD}
-                        preview = self.run_fixture(files, games, ['--system', system, '--dry-run'])
-                        actual = self.run_fixture(files, games, ['--system', system])
-                        target = f'Racer {system}.{extension}'
+                        matching = ['--approximate'] if kind == 'approximate' else []
+                        preview = self.run_fixture(files, games, ['--system', system, *matching])
+                        actual = self.run_fixture(files, games, ['--system', system, '--apply', *matching])
+                        target = f'Racer {system.replace("2", "two")}.{extension}'
                         self.assertIn(f'-> {target} ({kind} match', preview.output)
                         self.assertEqual(actual.renamed, [(next(iter(files)), target)])
                         self.assertEqual(actual.remaining, {target: PAYLOAD})
@@ -151,7 +168,7 @@ class SystemSelectionTests(unittest.TestCase):
                         games = {key: [('Unrelated', [])] for key in PROFILES}
                         games[other] = [('Racer', [CRC] if kind == 'CRC' else [])]
                         result = self.run_fixture({'Racer a.iso': PAYLOAD}, games,
-                                                  ['--system', system, '--dry-run'])
+                                                  ['--system', system, '--approximate'])
                         self.assertEqual(result.stats['no_match'], 1)
                         self.assertEqual(result.stats['planned_crc'], 0)
                         self.assertEqual(result.stats['planned_approximate'], 0)
@@ -191,7 +208,7 @@ class SystemSelectionTests(unittest.TestCase):
                     if reverse:
                         records.reverse()
                     result = self.run_fixture({'Racer a.iso': PAYLOAD}, {system: records},
-                                              ['--system', system, '--dry-run'])
+                                              ['--system', system, '--approximate'])
                     self.assertEqual(result.stats['no_match'], 1)
                     self.assertIn('Ambiguous CRC', result.warnings)
                     self.assertEqual(result.stats['planned_approximate'], 0)
@@ -210,7 +227,7 @@ class SystemSelectionTests(unittest.TestCase):
                  'saves/profile.srm': b'save', 'states/game.state': b'state',
                  'retroarch.cfg': b'config', 'Racer.sbi': b'sidecar',
                  'Racer.bin': PAYLOAD, 'Racer.cue': b'cue', 'Racer.m3u': b'playlist'}
-        result = self.run_fixture(files, {'ps2': [('Racer', [CRC])]}, ['--system', 'ps2'])
+        result = self.run_fixture(files, {'ps2': [('Racer', [CRC])]}, ['--system', 'ps2', '--apply'])
         self.assertEqual(result.renamed, [('Racer a.iso', 'Racer.iso')])
         self.assertEqual(result.remaining, {**{k: v for k, v in files.items() if k != 'Racer a.iso'},
                                             'Racer.iso': PAYLOAD})
@@ -262,6 +279,47 @@ class SystemSelectionTests(unittest.TestCase):
         result = self.run_fixture({'Racer.custom': PAYLOAD}, {}, ['--dry-run'], config)
         self.assertEqual(result.stats['processed'], 0)
         self.assertEqual(result.stats['skipped'], 1)
+
+    def test_selected_system_still_previews_by_default_without_writing_a_journal(self):
+        result = self.run_fixture({'Unknown.iso': PAYLOAD},
+                                  {'ps2': [('Canonical', [CRC])]}, ['--system', 'ps2'])
+        self.assertEqual(result.stats['planned_crc'], 1)
+        self.assertEqual(result.renamed, [])
+        self.assertIsNone(result.history)
+        self.assertFalse(result.undo_exists)
+
+    def test_selected_system_requires_approximate_even_with_apply(self):
+        result = self.run_fixture({'Racer a.chd': PAYLOAD},
+                                  {'ps2': [('Racer', [])]}, ['--system', 'ps2', '--apply'])
+        self.assertEqual(result.renamed, [])
+        self.assertIsNone(result.history)
+        self.assertIn('add --approximate', result.warnings)
+
+    def test_selected_system_renames_are_journaled_and_undoable_without_config(self):
+        for kind in ('CRC', 'approximate'):
+            with self.subTest(kind=kind):
+                result = self.run_fixture({'Racer a.iso': PAYLOAD},
+                    {'ps2': [('Racer', [CRC] if kind == 'CRC' else [])]},
+                    ['--system', 'ps2', '--apply', '--approximate'], undo_after=True)
+                self.assertEqual(result.renamed, [('Racer a.iso', 'Racer.iso')])
+                self.assertEqual(result.history, [{'from': 'Racer a.iso', 'to': 'Racer.iso'}])
+                self.assertEqual(result.restored, [('Racer.iso', 'Racer a.iso')])
+                self.assertEqual(result.remaining, {'Racer a.iso': PAYLOAD})
+                self.assertFalse(result.undo_exists)
+
+    def test_conflicting_operation_flags_fail_before_any_file_io(self):
+        for flags in (['--apply', '--dry-run'], ['--apply', '--undo'],
+                      ['--dry-run', '--undo']):
+            with self.subTest(flags=flags):
+                result = self.run_fixture({'Racer.iso': PAYLOAD}, {}, flags)
+                self.assertEqual(result.error, 2)
+                self.assertEqual(result.rom_reads, set())
+
+    def test_selected_system_retains_number_guard_from_safe_defaults(self):
+        result = self.run_fixture({'Racer 2.iso': PAYLOAD}, {'ps2': [('Racer', [])]},
+                                  ['--system', 'ps2', '--apply', '--approximate'])
+        self.assertEqual(result.renamed, [])
+        self.assertIsNone(result.history)
 
 
 if __name__ == '__main__':
