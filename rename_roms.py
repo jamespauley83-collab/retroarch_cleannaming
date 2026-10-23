@@ -5,6 +5,7 @@ import zlib
 import sys
 import logging
 import argparse
+import tempfile
 from Levenshtein import distance
 
 script_path = os.path.dirname(os.path.realpath(__file__))
@@ -65,6 +66,26 @@ def configure_logging(write_log):
     )
     return logging.getLogger(__name__)
 
+def replace_undo_history(entries):
+    """Publish a complete journal without truncating the existing retry history."""
+    temporary_path = None
+    try:
+        with tempfile.NamedTemporaryFile(mode='w', encoding='utf-8', dir=roms_path,
+                                         prefix='.rename_undo-', suffix='.tmp',
+                                         delete=False) as undo_file:
+            temporary_path = undo_file.name
+            json.dump(entries, undo_file, indent=1)
+            undo_file.flush()
+            os.fsync(undo_file.fileno())
+        os.replace(temporary_path, undo_path)
+        temporary_path = None
+    finally:
+        if temporary_path is not None:
+            try:
+                os.remove(temporary_path)
+            except FileNotFoundError:
+                pass
+
 # Undo uses its own journal, not the current DAT/configuration or console profile.
 if args.undo:
     try:
@@ -98,8 +119,7 @@ if args.undo:
         blocked_paths.update((source, target))
     if unresolved:
         # Keep chronological order so a later --undo retries newest records first.
-        with open(undo_path, 'w', encoding='utf-8') as undo_file:
-            json.dump(list(reversed(unresolved)), undo_file, indent=1)
+        replace_undo_history(list(reversed(unresolved)))
         log.warning(f'Kept {len(unresolved)} unresolved rename(s) in {undo_path}; resolve conflicts and retry --undo')
     else:
         os.remove(undo_path)

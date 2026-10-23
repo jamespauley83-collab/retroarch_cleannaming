@@ -21,7 +21,7 @@ class UndoHistoryTests(unittest.TestCase):
         for filename, contents in files.items():
             (root / filename).write_bytes(contents)
 
-    def run_undo(self, root, fail=()):
+    def run_undo(self, root, fail=(), expected_error=None):
         dependency = types.ModuleType('Levenshtein')
         dependency.distance = lambda left, right: 0
         logger = Mock()
@@ -38,9 +38,10 @@ class UndoHistoryTests(unittest.TestCase):
                 patch('os.rename', side_effect=rename) as calls, \
                 patch('logging.basicConfig'), patch('logging.FileHandler'), \
                 patch('logging.getLogger', return_value=logger):
-            with self.assertRaises(SystemExit) as stopped:
+            with self.assertRaises(expected_error or SystemExit) as stopped:
                 runpy.run_path(str(root / 'rename_roms.py'))
-            self.assertEqual(stopped.exception.code, 0)
+            if expected_error is None:
+                self.assertEqual(stopped.exception.code, 0)
         return calls.call_count, logger
 
     def history(self, root):
@@ -114,6 +115,44 @@ class UndoHistoryTests(unittest.TestCase):
             self.assertEqual(count, 2)
             self.assertEqual((root / 'Original.iso').read_bytes(), b'original')
             self.assertFalse((root / 'rename_undo.json').exists())
+
+    def test_partial_journal_write_failure_preserves_original_and_removes_temp(self):
+        entries = [{'from': 'Original.iso', 'to': 'Missing.iso'}]
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.prepare(root, entries, {})
+            original = (root / 'rename_undo.json').read_bytes()
+
+            def fail_after_partial_write(entries, stream, **kwargs):
+                stream.write('[{"from":')
+                raise OSError('fixture disk full during journal write')
+
+            with patch('json.dump', side_effect=fail_after_partial_write):
+                self.run_undo(root, expected_error=OSError)
+            self.assertEqual((root / 'rename_undo.json').read_bytes(), original)
+            self.assertEqual(list(root.glob('.rename_undo-*.tmp')), [])
+
+    def test_journal_fsync_failure_preserves_original_and_removes_temp(self):
+        entries = [{'from': 'Original.iso', 'to': 'Missing.iso'}]
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.prepare(root, entries, {})
+            original = (root / 'rename_undo.json').read_bytes()
+            with patch('os.fsync', side_effect=OSError('fixture journal sync failed')):
+                self.run_undo(root, expected_error=OSError)
+            self.assertEqual((root / 'rename_undo.json').read_bytes(), original)
+            self.assertEqual(list(root.glob('.rename_undo-*.tmp')), [])
+
+    def test_journal_replace_failure_preserves_original_and_removes_temp(self):
+        entries = [{'from': 'Original.iso', 'to': 'Missing.iso'}]
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.prepare(root, entries, {})
+            original = (root / 'rename_undo.json').read_bytes()
+            with patch('os.replace', side_effect=OSError('fixture atomic replace failed')):
+                self.run_undo(root, expected_error=OSError)
+            self.assertEqual((root / 'rename_undo.json').read_bytes(), original)
+            self.assertEqual(list(root.glob('.rename_undo-*.tmp')), [])
 
 
 if __name__ == '__main__':
