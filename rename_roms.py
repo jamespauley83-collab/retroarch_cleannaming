@@ -74,16 +74,35 @@ if args.undo:
         parser.error(f'Cannot read undo history: {error}')
     log = configure_logging(True)
     restored = 0
+    unresolved = []
+    blocked_paths = set()
     for entry in reversed(renames):
         source = os.path.join(roms_path, entry['from'])
         target = os.path.join(roms_path, entry['to'])
-        if os.path.exists(target) and not os.path.exists(source):
-            os.rename(target, source)
-            restored += 1
-            log.info(f'Restored: {entry["to"]} -> {entry["from"]}')
+        if source in blocked_paths or target in blocked_paths:
+            log.warning(f'Cannot restore {entry["to"]} -> {entry["from"]}; a later rename is unresolved')
+        elif os.path.exists(target) and not os.path.exists(source):
+            try:
+                os.rename(target, source)
+            except OSError as error:
+                log.warning(f'Cannot restore {entry["to"]} -> {entry["from"]}: {error}; left unchanged')
+            else:
+                restored += 1
+                log.info(f'Restored: {entry["to"]} -> {entry["from"]}')
+                continue
         else:
             log.warning(f'Cannot restore {entry["to"]} -> {entry["from"]}; left unchanged')
-    os.remove(undo_path)
+        unresolved.append(entry)
+        # Older records may depend on this rename. Do not mistake a conflicting
+        # intermediate filename for the file those older records originally moved.
+        blocked_paths.update((source, target))
+    if unresolved:
+        # Keep chronological order so a later --undo retries newest records first.
+        with open(undo_path, 'w', encoding='utf-8') as undo_file:
+            json.dump(list(reversed(unresolved)), undo_file, indent=1)
+        log.warning(f'Kept {len(unresolved)} unresolved rename(s) in {undo_path}; resolve conflicts and retry --undo')
+    else:
+        os.remove(undo_path)
     log.info(f'Undo: {restored} of {len(renames)} rename(s) restored')
     sys.exit(0)
 

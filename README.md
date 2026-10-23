@@ -81,7 +81,10 @@ python3 rename_roms.py --system ps2 --roms-dir "/path/to/ROMs/PS2" --apply --app
 Each applied rename is recorded in `rename_undo.json` in the selected ROM folder.
 `python3 rename_roms.py --roms-dir "/path/to/ROMs/PS2" --undo` restores recorded
 filenames without needing the current DAT or `--system`. Keep that journal until
-you have checked the results. Undo does not restore other files or associations. The tool does not update playlists,
+you have checked the results. Missing files, conflicting names, and failed restores
+remain in the journal for a later `--undo`; successfully restored entries are removed.
+If one step of a rename chain cannot be restored, dependent steps wait as well.
+Undo does not restore other files or associations. The tool does not update playlists,
 CUE references, save names, save-state names, or RetroArch settings. A later ROM
 rename can break those associations even though their contents are untouched.
 BIN/CUE sets, SBI sidecars, and M3U playlists are therefore not renamed by this
