@@ -1,6 +1,7 @@
 """Dashboard regressions, runnable without the database or third-party packages."""
 
 import json
+import os
 import tempfile
 import types
 import unittest
@@ -69,6 +70,7 @@ class PreviewServerTests(unittest.TestCase):
             f'ROM files found</span><span class="value">{count}</span>', page
         )
 
+    @unittest.skipIf(os.name == 'nt', 'fixture uses filenames forbidden on Windows')
     def test_filenames_are_rendered_as_text_not_html(self):
         names = (
             'game<img src=x onerror="alert(1)"> & \'bonus\'.nes',

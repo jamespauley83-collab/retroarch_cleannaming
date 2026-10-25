@@ -15,14 +15,22 @@ from unittest.mock import Mock, patch
 SCRIPT = Path(__file__).resolve().parents[1] / 'rename_roms.py'
 
 
+def native_case_insensitive(root):
+    """Read-only check using the ASCII script name present in every fixture."""
+    alternate = root / 'RENAME_ROMS.PY'
+    return (alternate.name not in os.listdir(root) and alternate.exists()
+            and os.path.samefile(root / 'rename_roms.py', alternate))
+
+
 class CaseInsensitiveDirectory:
     """Model case-insensitive lookup over real disposable files on any host.
 
     Preserve directory-entry spelling and perform real renames; only lookup is
     adapted. This does not claim to replace testing on native APFS or NTFS.
     """
-    def __init__(self, root):
+    def __init__(self, root, lookup_key=str.casefold):
         self.root = root
+        self.lookup_key = lookup_key
         self.real_exists = os.path.exists
         self.real_lexists = os.path.lexists
         self.real_samefile = os.path.samefile
@@ -31,7 +39,7 @@ class CaseInsensitiveDirectory:
         path = Path(path)
         if path.parent == self.root:
             for child in self.root.iterdir():
-                if child.name.casefold() == path.name.casefold():
+                if self.lookup_key(child.name) == self.lookup_key(path.name):
                     return child
         return path
 
@@ -58,6 +66,8 @@ class UndoHistoryTests(unittest.TestCase):
         logger = Mock()
         real_rename = os.rename
         filesystem = CaseInsensitiveDirectory(root)
+        if insensitive and native_case_insensitive(root):
+            insensitive = False
 
         def rename(source, target):
             if Path(source).name in fail:

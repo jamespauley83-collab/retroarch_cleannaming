@@ -116,7 +116,7 @@ class SystemSelectionTests(unittest.TestCase):
                 undo_exists=undo_path.exists(),
                 dats={Path(path).name for path in opened if path.endswith('.dat')},
                 rom_reads={Path(path).name for path in opened if str(roms) in path},
-                remaining={str(p.relative_to(roms)): p.read_bytes()
+                remaining={p.relative_to(roms).as_posix(): p.read_bytes()
                            for p in roms.rglob('*') if p.is_file() and p != undo_path},
             )
 
