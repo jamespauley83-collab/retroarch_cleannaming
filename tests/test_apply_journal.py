@@ -42,7 +42,7 @@ class ApplyJournalTests(unittest.TestCase):
                     runpy.run_path(str(root / 'rename_roms.py'))
                 self.assertEqual(stopped.exception.code, 0)
             else:
-                runpy.run_path(str(root / 'rename_roms.py'))
+                return runpy.run_path(str(root / 'rename_roms.py'))
 
     def test_failed_journal_publication_preserves_prior_history_and_never_moves_rom(self):
         old = [{'from': 'Old.nes', 'to': 'Old new.nes'}]
@@ -81,6 +81,35 @@ class ApplyJournalTests(unittest.TestCase):
             self.run_script(root, '--undo')
             self.assertEqual((root / ENTRY['from']).read_bytes(), PAYLOAD)
             self.assertFalse((root / 'rename_undo.json').exists())
+
+    def test_crc_destination_dangling_symlink_is_preserved_in_preview_and_apply(self):
+        for mode in ('--dry-run', '--apply'):
+            with self.subTest(mode=mode), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                self.prepare(root)
+                source = root / ENTRY['from']
+                target = root / ENTRY['to']
+                missing = root / 'missing.nes'
+                try:
+                    target.symlink_to(missing)
+                except OSError:
+                    self.skipTest('symlinks unavailable')
+                journal = root / 'rename_undo.json'
+                history = b'[{"from":"Earlier.nes", "to":"Earlier canonical.nes"}]\n'
+                journal.write_bytes(history)
+                source_stat = source.stat()
+                with patch('os.rename', wraps=os.rename) as moves:
+                    result = self.run_script(root, mode)
+                moves.assert_not_called()
+                self.assertEqual(result['stats']['skipped'], 1)
+                self.assertEqual(result['stats']['planned_crc'], 0)
+                self.assertEqual(result['stats']['renamed'], 0)
+                self.assertEqual(source.read_bytes(), PAYLOAD)
+                self.assertEqual(source.stat().st_mtime_ns, source_stat.st_mtime_ns)
+                self.assertTrue(target.is_symlink())
+                self.assertEqual(os.readlink(target), str(missing))
+                self.assertFalse(missing.exists())
+                self.assertEqual(journal.read_bytes(), history)
 
     def test_failed_move_keeps_intent_without_overwriting_original_on_undo(self):
         with tempfile.TemporaryDirectory() as directory:

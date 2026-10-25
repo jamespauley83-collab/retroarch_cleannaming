@@ -222,7 +222,7 @@ projected_sources = set()
 
 def destination_exists(filepath):
     return (filepath in projected_destinations or
-            (os.path.exists(filepath) and filepath not in projected_sources))
+            (os.path.lexists(filepath) and filepath not in projected_sources))
 
 def plan_rename(filepath, new_filepath):
     projected_destinations.discard(filepath)

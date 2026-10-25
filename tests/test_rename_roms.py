@@ -390,6 +390,28 @@ class SafetyTests(unittest.TestCase):
             warnings = " ".join(call.args[0] for call in logger.warning.call_args_list)
             self.assertIn("add --approximate", warnings)
 
+    def test_approximate_destination_dangling_symlink_is_preserved_in_preview_and_apply(self):
+        for mode in ('--dry-run', '--apply'):
+            with self.subTest(mode=mode), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                target = root / 'Mario.nes'
+                missing = root / 'missing.nes'
+                try:
+                    target.symlink_to(missing)
+                except OSError:
+                    self.skipTest('symlinks unavailable')
+                with patch('os.rename', wraps=os.rename) as moves:
+                    logger = self.run_script(root, [mode, '--approximate'],
+                                             ['Mario'], {'Mario a.nes': b'source'})
+                moves.assert_not_called()
+                self.assertEqual((root / 'Mario a.nes').read_bytes(), b'source')
+                self.assertTrue(target.is_symlink())
+                self.assertEqual(os.readlink(target), str(missing))
+                self.assertFalse(missing.exists())
+                self.assertFalse((root / 'rename_undo.json').exists())
+                warnings = ' '.join(call.args[0] for call in logger.warning.call_args_list)
+                self.assertIn('target already exists', warnings)
+
     def test_number_in_only_one_name_is_not_a_match(self):
         for filename, title in (("Final Fight 3.nes", "Final Fight (USA)"),
                                 ("Sonic.nes", "Sonic 3 (Europe)")):
