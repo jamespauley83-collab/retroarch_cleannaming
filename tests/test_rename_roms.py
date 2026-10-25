@@ -21,6 +21,15 @@ from test_undo_history import CaseInsensitiveDirectory, native_case_insensitive
 SCRIPT = Path(__file__).resolve().parents[1] / "rename_roms.py"
 
 
+def native_sharp_s_aliases_ss():
+    """Measure this fixture filesystem's Unicode lookup, independently of the tool."""
+    with tempfile.TemporaryDirectory() as directory:
+        source = Path(directory) / 'Straße.nes'
+        alternate = source.with_name('Strasse.nes')
+        source.write_bytes(b'disposable Unicode lookup probe')
+        return alternate.exists() and os.path.samefile(source, alternate)
+
+
 def levenshtein_distance(left, right):
     row = list(range(len(right) + 1))
     for i, left_char in enumerate(left, 1):
@@ -35,6 +44,10 @@ def levenshtein_distance(left, right):
 
 
 class RenameRomsTests(unittest.TestCase):
+    def require_distinct_unicode_spellings(self):
+        if native_sharp_s_aliases_ss():
+            self.skipTest('requires distinct sharp-s and ss entries')
+
     def run_fixture(self, files, games, dry_run, insensitive=False, lookup_key=str.casefold):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -53,7 +66,10 @@ class RenameRomsTests(unittest.TestCase):
                 for title, crcs in game_records
             ))
             for filename, contents in files.items():
-                (root / filename).write_bytes(contents)
+                # Fail fixture setup rather than overwrite another fixture if
+                # the native filesystem aliases two supposedly distinct names.
+                with (root / filename).open('xb') as output:
+                    output.write(contents)
 
             logger = Mock()
             listdir = os.listdir
@@ -174,6 +190,7 @@ class RenameRomsTests(unittest.TestCase):
         self.assertEqual(remaining, {'Stra\u00dfe.nes': first, 'bbb.nes': second})
 
     def test_freeing_one_unicode_entry_does_not_free_its_fold_neighbor(self):
+        self.require_distinct_unicode_spellings()
         first, second, third = b'unicode moved', b'unicode occupied', b'unicode blocked'
         stats, remaining = self.assert_preview_matches_run(
             {'Strasse.nes': first, 'Stra\u00dfe.nes': second, 'bbb.nes': third},
@@ -187,6 +204,7 @@ class RenameRomsTests(unittest.TestCase):
                                      'bbb.nes': third})
 
     def test_moving_unicode_neighbor_keeps_prior_destination_reserved(self):
+        self.require_distinct_unicode_spellings()
         first, second, third = b'reserved unicode', b'moving unicode', b'blocked unicode'
         stats, remaining = self.assert_preview_matches_run(
             {'AAA.nes': first, 'Stra\u00dfe.nes': second, 'zzz.nes': third},
@@ -200,6 +218,7 @@ class RenameRomsTests(unittest.TestCase):
                                      'zzz.nes': third})
 
     def test_initial_unicode_ambiguity_stays_reserved_after_a_neighbor_moves(self):
+        self.require_distinct_unicode_spellings()
         first, second = b'unicode neighbor moved', b'unicode neighbor retained'
         stats, remaining = self.assert_preview_matches_run(
             {'Strasse.nes': first, 'Stra\u00dfe.nes': second},
@@ -209,6 +228,30 @@ class RenameRomsTests(unittest.TestCase):
         self.assertEqual(stats['planned_crc'], 1)
         self.assertEqual(stats['skipped'], 1)
         self.assertEqual(remaining, {'New.nes': first, 'Stra\u00dfe.nes': second})
+
+    def test_native_unicode_alias_collision_and_freed_path_agree(self):
+        if not native_sharp_s_aliases_ss():
+            self.skipTest('requires native sharp-s and ss aliases')
+        first, second, third = b'blocked original', b'moved original', b'freed alias'
+        stats, remaining = self.assert_preview_matches_run(
+            {'AAA.nes': first, 'Straße.nes': second, 'zzz.nes': third},
+            {'Strasse': [f'{zlib.crc32(first):08X}'],
+             'Other': [f'{zlib.crc32(second):08X}'], 'STRASSE': [f'{zlib.crc32(third):08X}']},
+        )
+        self.assertEqual(stats['planned_crc'], 2)
+        self.assertEqual(stats['skipped'], 1)
+        self.assertEqual(remaining, {'AAA.nes': first, 'Other.nes': second,
+                                     'STRASSE.nes': third})
+
+    def test_native_unicode_alias_changes_stored_spelling(self):
+        if not native_sharp_s_aliases_ss():
+            self.skipTest('requires native sharp-s and ss aliases')
+        payload = b'native Unicode canonical spelling'
+        stats, remaining = self.assert_preview_matches_run(
+            {'STRASSE.nes': payload}, {'Straße': [f'{zlib.crc32(payload):08X}']},
+        )
+        self.assertEqual(stats['planned_crc'], 1)
+        self.assertEqual(remaining, {'Straße.nes': payload})
 
     def test_case_only_approximate_rename_preserves_canonical_spelling_on_insensitive_volume(self):
         payload = b'case-only approximate fixture'
