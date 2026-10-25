@@ -47,6 +47,20 @@ rename` line and the summary. Output identifies CRC versus approximate matches;
 planned counts are separate from actual rename counts. Existing target filenames
 and targets reserved by earlier planned operations are skipped.
 
+Collision checks include dangling symlinks. A case-only rename is allowed only
+when both spellings identify the same directory entry; distinct files, hardlinks,
+and symlinks remain protected. Preview infers case sensitivity using a read-only
+lookup of an existing filename with one ASCII letter's case changed. On
+case-insensitive directories, both preview and apply conservatively reserve
+Unicode casefold-equivalent destinations within a run. For example, a later
+`Strasse.nes` destination is skipped after reserving `Straße.nes`, even on a
+filesystem that permits both spellings. Freeing one existing entry never treats
+a distinct Unicode neighbor as free.
+If multiple existing entries share a folded name, their destination group stays
+reserved for the entire run, even after a member moves elsewhere. Ambiguous
+case-only undo restores are also skipped and retained for review; inode identity
+alone cannot distinguish separate hardlinks or a symlink to the source.
+
 `--system` is your declaration of the folder's console, **not automatic detection**.
 An ISO does not identify its console. Do not select one console for a folder that
 contains PS2, PSP, PlayStation, and GameCube images mixed together. Instead point

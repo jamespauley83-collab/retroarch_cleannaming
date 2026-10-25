@@ -50,7 +50,7 @@ class RealDependencyCliTests(unittest.TestCase):
             (roms / 'OtherConsole' / 'Other.iso').write_bytes(b'untouched nested fixture')
 
             def snapshot(path):
-                return {str(p.relative_to(path)): (p.read_bytes(), p.stat().st_mtime_ns)
+                return {p.relative_to(path).as_posix(): (p.read_bytes(), p.stat().st_mtime_ns)
                         for p in path.rglob('*') if p.is_file()}
 
             def invoke(*args, success=True):

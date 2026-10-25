@@ -94,6 +94,7 @@ class ApplyJournalTests(unittest.TestCase):
                     target.symlink_to(missing)
                 except OSError:
                     self.skipTest('symlinks unavailable')
+                original_link = os.readlink(target)
                 journal = root / 'rename_undo.json'
                 history = b'[{"from":"Earlier.nes", "to":"Earlier canonical.nes"}]\n'
                 journal.write_bytes(history)
@@ -107,7 +108,7 @@ class ApplyJournalTests(unittest.TestCase):
                 self.assertEqual(source.read_bytes(), PAYLOAD)
                 self.assertEqual(source.stat().st_mtime_ns, source_stat.st_mtime_ns)
                 self.assertTrue(target.is_symlink())
-                self.assertEqual(os.readlink(target), str(missing))
+                self.assertEqual(os.readlink(target), original_link)
                 self.assertFalse(missing.exists())
                 self.assertEqual(journal.read_bytes(), history)
 

@@ -98,9 +98,13 @@ def is_case_only_alias(source, target):
     if source == target or undo_dependency_key(source) != undo_dependency_key(target):
         return False
     try:
-        # samefile alone also accepts distinct hardlinks. The requested original
-        # spelling must be absent from the directory before restoring its case.
-        return (os.path.basename(source) not in os.listdir(os.path.dirname(source))
+        entries = os.listdir(os.path.dirname(source))
+        source_name, target_name = os.path.basename(source), os.path.basename(target)
+        # samefile also follows symlinks and accepts distinct hardlinks. Require
+        # a unique stored entry in this folded name group before changing case.
+        # Otherwise STRASSE could alias a separate Strasse link to Straße.
+        candidates = [name for name in entries if name.casefold() == source_name.casefold()]
+        return (source_name not in entries and candidates == [target_name]
                 and os.path.samefile(source, target))
     except OSError:
         return False
@@ -187,7 +191,8 @@ except (OSError, ValueError) as error:
 # is an error, never a reason to try a different console's database.
 files_by_extension = {}
 blocked_files = []
-for filename in sorted(os.listdir(roms_path)):
+original_directory_names = sorted(os.listdir(roms_path))
+for filename in original_directory_names:
     filepath = os.path.join(roms_path, filename)
     if (not os.path.isfile(filepath) or os.path.islink(filepath) or
             filename in PROJECT_FILES):
@@ -216,36 +221,62 @@ log = configure_logging(not dry_run)
 stats = {'processed': 0, 'renamed': 0, 'approximate': 0, 'skipped': 0, 'no_match': 0,
          'planned_crc': 0, 'planned_approximate': 0}
 
-# Simulate filesystem changes made by earlier dry-run operations.
+# Reserve destinations in both modes; preview also models vacated source entries.
 projected_destinations = set()
-projected_sources = set()
+projected_sources = {}
 # Infer the directory's lookup behavior from an existing ROM; preview never
-# creates a probe file. Extensions contain letters, so swapcase changes its name.
+# creates a probe file. Change only one ASCII letter: whole-name swapcase can
+# expand Unicode characters (e.g. sharp-s to SS), which need not be path aliases.
 sample_filename = next((filename for names in files_by_extension.values()
                         for filename in names), None)
-case_insensitive_directory = bool(sample_filename and is_case_only_alias(
-    os.path.join(roms_path, sample_filename.swapcase()),
-    os.path.join(roms_path, sample_filename),
-))
+sample_alternate = (re.sub(r'[A-Za-z]', lambda match: match[0].swapcase(),
+                           sample_filename, count=1) if sample_filename else None)
+try:
+    # This probe changes only ASCII, so unrelated Unicode fold neighbors do not
+    # make the directory's case behavior ambiguous as they can for a rename.
+    case_insensitive_directory = bool(
+        sample_filename and sample_alternate not in os.listdir(roms_path)
+        and os.path.samefile(os.path.join(roms_path, sample_alternate),
+                             os.path.join(roms_path, sample_filename)))
+except OSError:
+    case_insensitive_directory = False
 
 def projected_path_key(filepath):
     return undo_dependency_key(filepath) if case_insensitive_directory else filepath
 
+if case_insensitive_directory:
+    # Keep initially ambiguous Unicode groups occupied for this entire run,
+    # even if one member moves away. Preview still sees the original entries;
+    # apply must not relax the same conservative rule partway through the run.
+    seen_keys = set()
+    for name in original_directory_names:
+        key = projected_path_key(os.path.join(roms_path, name))
+        if key in seen_keys:
+            projected_destinations.add(key)
+        seen_keys.add(key)
+
 def destination_exists(filepath, current_source):
     key = projected_path_key(filepath)
-    return (key in projected_destinations or
-            (os.path.lexists(filepath) and key not in projected_sources
-             # A different spelling of this source is one directory entry,
-             # not an occupied destination. Distinct entries remain protected.
-             and not is_case_only_alias(filepath, current_source)))
+    if key in projected_destinations:
+        return True
+    occupied = os.path.lexists(filepath)
+    if occupied and dry_run:
+        # Unicode casefold can group distinct entries on native filesystems.
+        # A folded key alone never proves that an occupied path was freed.
+        occupied = not any(filepath == source or is_case_only_alias(filepath, source)
+                           for source in projected_sources.get(key, ()))
+    # A different spelling of this source is one directory entry, not an
+    # occupied destination. Distinct files, hardlinks and symlinks stay protected.
+    return occupied and not is_case_only_alias(filepath, current_source)
 
 def plan_rename(filepath, new_filepath):
     source_key = projected_path_key(filepath)
     destination_key = projected_path_key(new_filepath)
-    projected_destinations.discard(source_key)
-    projected_sources.add(source_key)
+    projected_sources.setdefault(source_key, set()).add(filepath)
+    # Each original input is visited once; a newly created destination is never
+    # a later source. Retain its reservation even if a distinct Unicode neighbor
+    # moves. Apply shares these conservative reservations with preview.
     projected_destinations.add(destination_key)
-    projected_sources.discard(destination_key)
 
 if dry_run:
     log.info('Preview only — no files will be renamed; no log file will be written. Run with --apply to rename.')
@@ -270,6 +301,7 @@ def rename_file(filepath, new_filepath):
     # A failed move leaves a conservative, unresolved record for inspection.
     replace_undo_history(applied_renames)
     os.rename(filepath, new_filepath)
+    plan_rename(filepath, new_filepath)
 
 def parse_dat_file(dat_file_path, filter_prefix):
     """Return CRC-to-title sets and prefix-filtered names from a clrmamepro DAT."""
