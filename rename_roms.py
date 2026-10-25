@@ -4,56 +4,213 @@ import json
 import zlib
 import sys
 import logging
+import argparse
+import tempfile
 from Levenshtein import distance
 
-USAGE = (
-    'usage: rename_roms.py [--apply] [--approximate] [--distance=N] [--roms=DIR] [--verbose]\n'
-    '       rename_roms.py --undo [--roms=DIR]\n'
-    'Previews renames unless --apply is given. Fuzzy name matches are only used with --approximate.'
+script_path = os.path.dirname(os.path.realpath(__file__))
+parser = argparse.ArgumentParser(
+    description='Preview console-specific ROM renames. Use --apply to rename; fuzzy matches require --approximate.',
+    allow_abbrev=False,
 )
+parser.add_argument('--system', type=str.lower,
+                    help='Console profile in config.json: ps2, psp, psx, or gamecube')
+parser.add_argument('--roms-dir', '--roms', default=script_path,
+                    help='One console directory to scan (non-recursive; default: script directory)')
+parser.add_argument('--config', default=os.path.join(script_path, 'config.json'),
+                    help='Configuration file; relative DAT paths are resolved beside this file')
+parser.add_argument('--distance', '-distance', type=int, default=10,
+                    help='Exclusive fuzzy-distance threshold (default: 10; 0 disables fuzzy matching)')
+mode = parser.add_mutually_exclusive_group()
+mode.add_argument('--apply', action='store_true', help='Apply renames and record them for --undo')
+mode.add_argument('--dry-run', '-dry-run', action='store_true',
+                  help='Preview only (the default); do not rename files or write a log')
+mode.add_argument('--undo', action='store_true', help='Reverse recorded renames in the selected ROM directory')
+parser.add_argument('--approximate', action='store_true',
+                    help='Allow fuzzy name matching when no CRC matches')
+parser.add_argument('--verbose', '-verbose', '-v', action='store_true')
+args = parser.parse_args()
+closest_distance_threshold = args.distance
+dry_run = not args.apply
+approximate = args.approximate
+verbose = args.verbose
+if closest_distance_threshold < 0:
+    parser.error('--distance must be non-negative')
 
-# Default closest distance
-closest_distance_threshold = 10
-dry_run = True
-approximate = False
-undo = False
-verbose = False
-roms_path = os.path.dirname(os.path.realpath(__file__))
-
-# Parse command line arguments; reject anything unknown so a typo never renames files.
-for arg in sys.argv[1:]:
-    if arg.startswith(('-distance=', '--distance=')):
-        closest_distance_threshold = int(arg.split('=', 1)[1])
-    elif arg.startswith('--roms='):
-        roms_path = os.path.realpath(arg.split('=', 1)[1])
-    elif arg in ('--dry-run', '-dry-run'):
-        dry_run = True
-    elif arg == '--apply':
-        dry_run = False
-    elif arg == '--approximate':
-        approximate = True
-    elif arg == '--undo':
-        undo = True
-    elif arg in ('--verbose', '-verbose', '-v'):
-        verbose = True
-    else:
-        sys.exit(f'Unknown option: {arg}\n{USAGE}')
-
-# The tool's own files share extensions with ROM formats (e.g. .md for Mega Drive).
-PROJECT_FILES = {'README.md', 'AGENTS.md', 'config.json', 'requirements.txt'}
+# Disc/container extensions do not identify a console. This guard also applies
+# to legacy flat configs, so an old iso -> PSP mapping cannot silently return.
+SYSTEM_REQUIRED_EXTENSIONS = {
+    'iso', 'chd', 'cso', 'gcm', 'rvz', 'wbfs', 'bin', 'cue', 'img', 'mdf',
+    'nrg', 'cdi', 'pbp', 'sbi',
+}
+# Companion files must keep their names in sync with their images. Multi-file
+# disc sets and sidecars are outside the single-file rename workflow.
+UNSUPPORTED_COMPANION_EXTENSIONS = {'bin', 'cue', 'sbi', 'm3u'}
+PROJECT_FILES = {'README.md', 'AGENTS.md', 'config.json', 'requirements.txt', 'rename_undo.json'}
+config_path = os.path.abspath(args.config)
+config_directory = os.path.dirname(config_path)
+roms_path = os.path.abspath(args.roms_dir)
+if not os.path.isdir(roms_path):
+    parser.error(f'ROM directory does not exist: {roms_path}')
 undo_path = os.path.join(roms_path, 'rename_undo.json')
+log_file_path = os.path.join(script_path, 'rename_log.txt')
 
-# --- Logging setup: writes to both console and a log file ---
-log_file_path = os.path.join(os.path.dirname(os.path.realpath(__file__)), 'rename_log.txt')
-logging.basicConfig(
-    level=logging.DEBUG if verbose else logging.INFO,
-    format='%(asctime)s [%(levelname)s] %(message)s',
-    handlers=[
-        logging.StreamHandler(sys.stdout),
-        logging.FileHandler(log_file_path, encoding='utf-8'),
-    ],
-)
-log = logging.getLogger(__name__)
+def configure_logging(write_log):
+    handlers = [logging.StreamHandler(sys.stdout)]
+    if write_log:
+        handlers.append(logging.FileHandler(log_file_path, encoding='utf-8'))
+    logging.basicConfig(
+        level=logging.DEBUG if verbose else logging.INFO,
+        format='%(asctime)s [%(levelname)s] %(message)s',
+        handlers=handlers,
+    )
+    return logging.getLogger(__name__)
+
+def replace_undo_history(entries):
+    """Publish a complete journal without truncating the existing retry history."""
+    temporary_path = None
+    try:
+        with tempfile.NamedTemporaryFile(mode='w', encoding='utf-8', dir=roms_path,
+                                         prefix='.rename_undo-', suffix='.tmp',
+                                         delete=False) as undo_file:
+            temporary_path = undo_file.name
+            json.dump(entries, undo_file, indent=1)
+            undo_file.flush()
+            os.fsync(undo_file.fileno())
+        os.replace(temporary_path, undo_path)
+        temporary_path = None
+    finally:
+        if temporary_path is not None:
+            try:
+                os.remove(temporary_path)
+            except FileNotFoundError:
+                pass
+
+def undo_dependency_key(path):
+    # Be conservative even when an unresolved path is missing, so samefile()
+    # cannot identify it. normcase() alone does not fold case on macOS. On a
+    # case-sensitive volume this may defer an independent case-variant entry;
+    # retaining it for retry is safer than consuming a conflicting file.
+    return os.path.normpath(path).casefold()
+
+def is_case_only_alias(source, target):
+    """True only for two spellings of one existing directory entry."""
+    if source == target or undo_dependency_key(source) != undo_dependency_key(target):
+        return False
+    try:
+        # samefile alone also accepts distinct hardlinks. The requested original
+        # spelling must be absent from the directory before restoring its case.
+        return (os.path.basename(source) not in os.listdir(os.path.dirname(source))
+                and os.path.samefile(source, target))
+    except OSError:
+        return False
+
+# Undo uses its own journal, not the current DAT/configuration or console profile.
+if args.undo:
+    try:
+        with open(undo_path, 'r', encoding='utf-8') as undo_file:
+            renames = json.load(undo_file)
+    except (OSError, ValueError) as error:
+        parser.error(f'Cannot read undo history: {error}')
+    log = configure_logging(True)
+    restored = 0
+    unresolved = []
+    blocked_paths = set()
+    for entry in reversed(renames):
+        source = os.path.join(roms_path, entry['from'])
+        target = os.path.join(roms_path, entry['to'])
+        source_key = undo_dependency_key(source)
+        target_key = undo_dependency_key(target)
+        if source_key in blocked_paths or target_key in blocked_paths:
+            log.warning(f'Cannot restore {entry["to"]} -> {entry["from"]}; a later rename is unresolved')
+        elif os.path.exists(target) and (not os.path.lexists(source)
+                                         or is_case_only_alias(source, target)):
+            try:
+                os.rename(target, source)
+            except OSError as error:
+                log.warning(f'Cannot restore {entry["to"]} -> {entry["from"]}: {error}; left unchanged')
+            else:
+                restored += 1
+                log.info(f'Restored: {entry["to"]} -> {entry["from"]}')
+                continue
+        else:
+            log.warning(f'Cannot restore {entry["to"]} -> {entry["from"]}; left unchanged')
+        unresolved.append(entry)
+        # Older records may depend on this rename. Do not mistake a conflicting
+        # intermediate filename for the file those older records originally moved.
+        blocked_paths.update((source_key, target_key))
+    if unresolved:
+        # Keep chronological order so a later --undo retries newest records first.
+        replace_undo_history(list(reversed(unresolved)))
+        log.warning(f'Kept {len(unresolved)} unresolved rename(s) in {undo_path}; resolve conflicts and retry --undo')
+    else:
+        os.remove(undo_path)
+    log.info(f'Undo: {restored} of {len(renames)} rename(s) restored')
+    sys.exit(0)
+
+
+try:
+    with open(config_path, 'r', encoding='utf-8') as config_file:
+        config = json.load(config_file)
+    if not isinstance(config, dict):
+        raise ValueError('configuration must be an object')
+    systems = config.get('systems', {})
+    if not isinstance(systems, dict):
+        raise ValueError('systems must be an object')
+    default_mapping = {ext: dat for ext, dat in config.items() if ext != 'systems'}
+    if any(not isinstance(dat, str) or not dat for dat in default_mapping.values()):
+        raise ValueError('extension mappings must contain non-empty DAT paths')
+    system_extensions = set(SYSTEM_REQUIRED_EXTENSIONS)
+    for system, profile in systems.items():
+        if (not isinstance(profile, dict) or
+                not isinstance(profile.get('dat'), str) or not profile['dat'] or
+                not isinstance(profile.get('extensions'), list) or not profile['extensions'] or
+                any(not isinstance(ext, str) or not re.fullmatch(r'[a-z0-9]+', ext)
+                    for ext in profile['extensions'])):
+            raise ValueError(f'invalid system profile: {system}')
+        system_extensions.update(profile['extensions'])
+    if args.system:
+        if args.system not in systems:
+            raise ValueError(f'unknown system {args.system!r}; available: {", ".join(sorted(systems))}')
+        profile = systems[args.system]
+        # A selected profile replaces defaults; it never falls back to another DAT.
+        extension_mapping = {ext: profile['dat'] for ext in profile['extensions']
+                             if ext not in UNSUPPORTED_COMPANION_EXTENSIONS}
+    else:
+        extension_mapping = {ext: dat for ext, dat in default_mapping.items()
+                             if ext not in system_extensions and
+                             ext not in UNSUPPORTED_COMPANION_EXTENSIONS}
+except (OSError, ValueError) as error:
+    parser.error(f'Unable to load configuration: {error}')
+
+# Preflight before opening a log or renaming anything. A missing selected DAT
+# is an error, never a reason to try a different console's database.
+files_by_extension = {}
+blocked_files = []
+for filename in sorted(os.listdir(roms_path)):
+    filepath = os.path.join(roms_path, filename)
+    if (not os.path.isfile(filepath) or os.path.islink(filepath) or
+            filename in PROJECT_FILES):
+        continue
+    extension = filename.rsplit('.', 1)[-1].lower()
+    if extension in extension_mapping:
+        files_by_extension.setdefault(extension, []).append(filename)
+    elif not args.system and extension in system_extensions:
+        blocked_files.append(filename)
+
+dat_paths = {ext: os.path.join(config_directory, dat)
+             for ext, dat in extension_mapping.items()}
+required_dats = set(dat_paths.values()) if args.system else {
+    dat_paths[ext] for ext in files_by_extension
+}
+for dat_file_path in sorted(required_dats):
+    try:
+        with open(dat_file_path, 'r', encoding='utf-8'):
+            pass
+    except OSError as error:
+        parser.error(f'Cannot read selected DAT {dat_file_path}: {error}')
+
+log = configure_logging(not dry_run)
 
 # Counters for end-of-run summary
 stats = {'processed': 0, 'renamed': 0, 'approximate': 0, 'skipped': 0, 'no_match': 0,
@@ -73,32 +230,13 @@ def plan_rename(filepath, new_filepath):
     projected_destinations.add(new_filepath)
     projected_sources.discard(new_filepath)
 
-# Load configuration from JSON file
-config_path = os.path.join(os.path.dirname(os.path.realpath(__file__)), 'config.json')
-with open(config_path, 'r', encoding='utf-8') as config_file:
-    config = json.load(config_file)
-
-dat_root = os.path.dirname(os.path.realpath(__file__))
-
-if undo:
-    with open(undo_path, 'r', encoding='utf-8') as undo_file:
-        renames = json.load(undo_file)
-    restored = 0
-    for entry in reversed(renames):
-        source = os.path.join(roms_path, entry['from'])
-        target = os.path.join(roms_path, entry['to'])
-        if os.path.exists(target) and not os.path.exists(source):
-            os.rename(target, source)
-            restored += 1
-            log.info(f'Restored: {entry["to"]} -> {entry["from"]}')
-        else:
-            log.warning(f'Cannot restore {entry["to"]} -> {entry["from"]}; left unchanged')
-    os.remove(undo_path)
-    log.info(f'Undo: {restored} of {len(renames)} rename(s) restored')
-    sys.exit(0)
-
 if dry_run:
-    log.info('Preview only — no files will be renamed. Run with --apply to rename.')
+    log.info('Preview only — no files will be renamed; no log file will be written. Run with --apply to rename.')
+log.info(f'System: {args.system or "extension defaults (disc images require --system)"}; directory: {roms_path}')
+for filename in blocked_files:
+    log.warning(f'Skipping: {filename}; console is ambiguous — select --system and a single-console --roms-dir')
+    stats['skipped'] += 1
+
 if not approximate:
     log.info('Fuzzy name matches are reported but not used. Add --approximate to use them.')
 
@@ -109,11 +247,12 @@ if not dry_run and os.path.exists(undo_path):
         applied_renames = json.load(undo_file)
 
 def rename_file(filepath, new_filepath):
-    os.rename(filepath, new_filepath)
     applied_renames.append({'from': os.path.basename(filepath), 'to': os.path.basename(new_filepath)})
-    # Rewrite after every rename so an interrupted run can still be undone.
-    with open(undo_path, 'w', encoding='utf-8') as undo_file:
-        json.dump(applied_renames, undo_file, indent=1)
+    # Publish the intent before moving the file: a write/sync/replace failure
+    # leaves the ROM untouched, and interruption after rename retains recovery.
+    # A failed move leaves a conservative, unresolved record for inspection.
+    replace_undo_history(applied_renames)
+    os.rename(filepath, new_filepath)
 
 def parse_dat_file(dat_file_path, filter_prefix):
     """Return CRC-to-title sets and prefix-filtered names from a clrmamepro DAT."""
@@ -234,21 +373,10 @@ def extract_number_from_name(name):
         return match.group(0)
     return None
 
-# Gather all files by extension
-files_by_extension = {}
-for filename in os.listdir(roms_path):
-    filepath = os.path.join(roms_path, filename)
-    if os.path.isfile(filepath) and filename not in PROJECT_FILES:
-        extension = filename.split('.')[-1].lower()
-        if extension in config:
-            if extension not in files_by_extension:
-                files_by_extension[extension] = []
-            files_by_extension[extension].append(filename)
-
 # Process files by extension
 for extension, filenames in files_by_extension.items():
-    dat_file_path = os.path.join(dat_root, config[extension])
-    log.debug(f'Extension .{extension}: {len(filenames)} file(s) found, database: {config[extension]}')
+    dat_file_path = dat_paths[extension]
+    log.info(f'Extension .{extension}: {len(filenames)} file(s) found, database: {dat_file_path}')
     
     # Process each file
     for filename in filenames:
@@ -341,4 +469,5 @@ log.info(
     f'{stats["skipped"]} skipped, '
     f'{stats["no_match"]} no match'
 )
-log.info(f'Full log written to {log_file_path}')
+if not dry_run:
+    log.info(f'Full log written to {log_file_path}')

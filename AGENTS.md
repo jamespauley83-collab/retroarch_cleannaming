@@ -10,19 +10,20 @@ This is a CLI Python script (`rename_roms.py`) that renames retro game ROM files
 
 ## Running
 ```
-python3 rename_roms.py                          # preview only (default)
-python3 rename_roms.py --apply                  # rename CRC matches
-python3 rename_roms.py --apply --approximate    # also use fuzzy name matches (--distance=N, default 10)
-python3 rename_roms.py --undo                   # reverse applied renames from rename_undo.json
+python3 rename_roms.py                                      # preview only (default)
+python3 rename_roms.py --system ps2 --roms-dir /path/to/PS2   # console-specific preview
+python3 rename_roms.py --apply                              # rename CRC matches
+python3 rename_roms.py --apply --approximate                # also use fuzzy matches
+python3 rename_roms.py --undo --roms-dir /path/to/PS2         # reverse recorded renames
 ```
-ROM files go in the working directory (`/app` inside the container) or a folder passed with `--roms=DIR`. Unknown options stop the script. The script matches by CRC32; Levenshtein fuzzy matches are only used with `--approximate`, and never when a number appears in only one of the two names.
+Use `--roms-dir` (or `--roms`) to scan one existing directory non-recursively; the default is the script directory. Disc images require an explicit `--system` profile (`ps2`, `psp`, `psx`, or `gamecube`). CRC matching and optional `--approximate` matching use only that profile's DAT. Fuzzy matching never pairs names when a number appears in only one name. Preview runs do not write a log; only `--apply` renames. Applied renames are recorded in the selected folder's `rename_undo.json`; `--undo` does not require the original DAT. Unknown, abbreviated, or conflicting operation flags stop the script.
 
 ## Docker Environment
 - `docker-compose.base44.yml` runs a `python:3.12-slim` container with the source bind-mounted at `/app`.
 - On startup it clones `libretro-database` (if not present) and installs Python dependencies.
 - A lightweight status page (`preview_server.py`) is served on port 3000 so the Base44 preview has an endpoint. The CLI tool itself is still run via exec:
   ```
-  docker compose -f docker-compose.base44.yml exec app python3 rename_roms.py
+  docker compose -f docker-compose.base44.yml exec app python3 rename_roms.py --dry-run
   ```
 - The `libretro-database` clone persists in a named volume so it isn't re-cloned on restart.
 
@@ -32,7 +33,7 @@ ROM files go in the working directory (`/app` inside the container) or a folder 
 - The actual renaming tool is still run via `docker compose exec app python3 rename_roms.py`.
 
 ## Notes
-- `config.json` maps file extensions to libretro `.dat` file paths.
+- `config.json` keeps cartridge extension defaults and a `systems` object of console profiles, each with a `dat` path and `extensions` list. Relative DAT paths are resolved beside the config file. Legacy extension-only disc mappings are blocked.
 - `docker-compose.base44.yml` must define `ports:` exactly once. A prior merge introduced a duplicate `ports:` key, which made `docker compose` fail to parse the file with a YAML "mapping key already defined" error — keep a single `ports:` block.
 
 ## Testing

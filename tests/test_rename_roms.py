@@ -1,6 +1,8 @@
 """Exercise DAT matching and dry-run planning in temporary ROM fixtures."""
 
 import json
+import contextlib
+import io
 import os
 from pathlib import Path
 import re
@@ -372,10 +374,12 @@ class SafetyTests(unittest.TestCase):
         for option in ("--dryrun", "-n", "--aply"):
             with self.subTest(option=option), tempfile.TemporaryDirectory() as directory:
                 root = Path(directory)
-                with self.assertRaises(SystemExit) as stopped:
+                stderr = io.StringIO()
+                with contextlib.redirect_stderr(stderr), self.assertRaises(SystemExit) as stopped:
                     self.run_script(root, ["--apply", "--approximate", option],
                                     ["Mario"], {"Mario a.nes": b"x"})
-                self.assertIn(option, str(stopped.exception.code))
+                self.assertEqual(stopped.exception.code, 2)
+                self.assertIn(option, stderr.getvalue())
                 self.assertEqual(self.names(root), ["Mario a.nes"])
 
     def test_fuzzy_matches_need_approximate(self):
