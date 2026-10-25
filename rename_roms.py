@@ -86,6 +86,25 @@ def replace_undo_history(entries):
             except FileNotFoundError:
                 pass
 
+def undo_dependency_key(path):
+    # Be conservative even when an unresolved path is missing, so samefile()
+    # cannot identify it. normcase() alone does not fold case on macOS. On a
+    # case-sensitive volume this may defer an independent case-variant entry;
+    # retaining it for retry is safer than consuming a conflicting file.
+    return os.path.normpath(path).casefold()
+
+def is_case_only_alias(source, target):
+    """True only for two spellings of one existing directory entry."""
+    if source == target or undo_dependency_key(source) != undo_dependency_key(target):
+        return False
+    try:
+        # samefile alone also accepts distinct hardlinks. The requested original
+        # spelling must be absent from the directory before restoring its case.
+        return (os.path.basename(source) not in os.listdir(os.path.dirname(source))
+                and os.path.samefile(source, target))
+    except OSError:
+        return False
+
 # Undo uses its own journal, not the current DAT/configuration or console profile.
 if args.undo:
     try:
@@ -100,9 +119,12 @@ if args.undo:
     for entry in reversed(renames):
         source = os.path.join(roms_path, entry['from'])
         target = os.path.join(roms_path, entry['to'])
-        if source in blocked_paths or target in blocked_paths:
+        source_key = undo_dependency_key(source)
+        target_key = undo_dependency_key(target)
+        if source_key in blocked_paths or target_key in blocked_paths:
             log.warning(f'Cannot restore {entry["to"]} -> {entry["from"]}; a later rename is unresolved')
-        elif os.path.exists(target) and not os.path.exists(source):
+        elif os.path.exists(target) and (not os.path.lexists(source)
+                                         or is_case_only_alias(source, target)):
             try:
                 os.rename(target, source)
             except OSError as error:
@@ -116,7 +138,7 @@ if args.undo:
         unresolved.append(entry)
         # Older records may depend on this rename. Do not mistake a conflicting
         # intermediate filename for the file those older records originally moved.
-        blocked_paths.update((source, target))
+        blocked_paths.update((source_key, target_key))
     if unresolved:
         # Keep chronological order so a later --undo retries newest records first.
         replace_undo_history(list(reversed(unresolved)))
@@ -225,11 +247,12 @@ if not dry_run and os.path.exists(undo_path):
         applied_renames = json.load(undo_file)
 
 def rename_file(filepath, new_filepath):
-    os.rename(filepath, new_filepath)
     applied_renames.append({'from': os.path.basename(filepath), 'to': os.path.basename(new_filepath)})
-    # Rewrite after every rename so an interrupted run can still be undone.
-    with open(undo_path, 'w', encoding='utf-8') as undo_file:
-        json.dump(applied_renames, undo_file, indent=1)
+    # Publish the intent before moving the file: a write/sync/replace failure
+    # leaves the ROM untouched, and interruption after rename retains recovery.
+    # A failed move leaves a conservative, unresolved record for inspection.
+    replace_undo_history(applied_renames)
+    os.rename(filepath, new_filepath)
 
 def parse_dat_file(dat_file_path, filter_prefix):
     """Return CRC-to-title sets and prefix-filtered names from a clrmamepro DAT."""

@@ -34,6 +34,8 @@ On Linux/macOS, for example:
 
 ```sh
 python3 rename_roms.py --system ps2 --roms-dir "/path/to/ROMs/PS2" --dry-run
+python3 rename_roms.py --system psp --roms-dir "/path/to/ROMs/PSP" --dry-run
+python3 rename_roms.py --system psx --roms-dir "/path/to/ROMs/PlayStation" --dry-run
 python3 rename_roms.py --system gamecube --roms-dir "/path/to/ROMs/GameCube" --dry-run
 ```
 
@@ -78,17 +80,34 @@ python3 rename_roms.py --system ps2 --roms-dir "/path/to/ROMs/PS2" --apply
 python3 rename_roms.py --system ps2 --roms-dir "/path/to/ROMs/PS2" --apply --approximate
 ```
 
-Each applied rename is recorded in `rename_undo.json` in the selected ROM folder.
+Before each applied rename, its intent is recorded in `rename_undo.json` in the
+selected ROM folder. Both apply and undo publish a complete journal through a
+same-directory temporary file, flush and sync it, then atomically replace the
+previous journal. A journal publication failure stops apply before moving the
+next ROM, preserving earlier recovery records. If the move itself fails or the
+process stops before it, the uncompleted intent is retained for inspection; do
+not assume every journal entry represents a completed move.
 `python3 rename_roms.py --roms-dir "/path/to/ROMs/PS2" --undo` restores recorded
 filenames without needing the current DAT or `--system`. Keep that journal until
 you have checked the results. Missing files, conflicting names, and failed restores
 remain in the journal for a later `--undo`; successfully restored entries are removed.
 If one step of a rename chain cannot be restored, dependent steps wait as well.
+Dependency comparisons ignore case so an unresolved spelling such as `Game.iso`
+also blocks older records using `game.iso`. This deliberately errs on the side
+of retaining history on case-sensitive volumes too. A case-only restore is
+allowed when both names resolve to one directory entry and the original spelling
+is absent; distinct files or hardlinks are never treated as a case-only rename.
+An occupied original name, including a dangling symlink, remains a conflict.
 Undo does not restore other files or associations. The tool does not update playlists,
 CUE references, save names, save-state names, or RetroArch settings. A later ROM
 rename can break those associations even though their contents are untouched.
 BIN/CUE sets, SBI sidecars, and M3U playlists are therefore not renamed by this
 single-file workflow. Previewing does not change any of these associations.
+For an existing RetroArch Lab collection, keep using previews until the specific
+playlist entries, core-specific saves/save states, and any sidecar references
+have been checked on disposable copies. Do not run apply or undo concurrently
+with another renamer or while another program changes the same folder. The
+journal protects recovery records; it is not a collection backup or a lock.
 
 ## Console profiles and configuration
 
@@ -171,6 +190,16 @@ those disposable files, exercise all four console profiles and competing CRC /
 fuzzy candidates, preserve the duplicate-CRC regressions, and check that previews
 leave file contents, names, and modification times unchanged. The unit suite
 uses a standard-library matching substitute and does not require downloaded DATs.
+Undo regressions model case-insensitive lookup over real temporary files and
+also exercise native case-sensitive conflicts and hardlinks where supported;
+the model is not a native macOS/Windows filesystem certification.
+
+With `requirements.txt` installed, the same command also runs eight real-library
+CLI scenarios (four consoles x CRC/approximate). Without that dependency, the
+two CLI test methods are skipped. These scenarios check preview immutability,
+explicit approximate opt-in, application, repeated conflicts, and complete undo
+after removal of the configuration and DATs. Apply tests also inject partial
+journal writes, sync/replace failures, failed moves, and interruption after a move.
 
 ## Docker / Base44 preview
 
