@@ -207,6 +207,9 @@ uses a standard-library matching substitute and does not require downloaded DATs
 Undo regressions model case-insensitive lookup over real temporary files and
 also exercise native case-sensitive conflicts and hardlinks where supported;
 the model is not a native macOS/Windows filesystem certification.
+Native tests measure whether `Straße` and `Strasse` identify the same entry.
+Fixtures that require distinct spellings are skipped where they cannot exist;
+native alias tests instead verify collisions, freed paths, and canonical spelling.
 
 With `requirements.txt` installed, the same command also runs eight real-library
 CLI scenarios (four consoles x CRC/approximate). Without that dependency, the
