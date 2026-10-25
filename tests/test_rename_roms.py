@@ -13,6 +13,9 @@ import types
 import unittest
 from unittest.mock import Mock, patch
 import zlib
+from contextlib import ExitStack
+
+from test_undo_history import CaseInsensitiveDirectory
 
 
 SCRIPT = Path(__file__).resolve().parents[1] / "rename_roms.py"
@@ -32,7 +35,7 @@ def levenshtein_distance(left, right):
 
 
 class RenameRomsTests(unittest.TestCase):
-    def run_fixture(self, files, games, dry_run):
+    def run_fixture(self, files, games, dry_run, insensitive=False):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             script = root / "rename_roms.py"
@@ -57,13 +60,40 @@ class RenameRomsTests(unittest.TestCase):
             # Keep fixture matching deterministic and standard-library-only.
             dependency = types.ModuleType("Levenshtein")
             dependency.distance = levenshtein_distance
+            filesystem = CaseInsensitiveDirectory(root)
+            # Native case-insensitive volumes need no lookup simulation. This
+            # keeps these same assertions useful on an actual Mac or Windows.
+            if insensitive:
+                for filename in files:
+                    source = root / filename
+                    alternate = root / filename.swapcase()
+                    if (alternate.name not in os.listdir(root) and alternate.exists()
+                            and os.path.samefile(source, alternate)):
+                        insensitive = False
+                        break
+            real_rename = os.rename
+
+            def rename_file(source, target):
+                if insensitive:
+                    resolved_source = filesystem.resolve(source)
+                    resolved_target = filesystem.resolve(target)
+                    if resolved_target != resolved_source:
+                        target = resolved_target
+                    source = resolved_source
+                real_rename(source, target)
+
             # Use the same deterministic input order in simulated and real runs.
-            with patch.dict("sys.modules", {"Levenshtein": dependency}), \
+            with ExitStack() as stack, \
+                    patch.dict("sys.modules", {"Levenshtein": dependency}), \
                     patch("sys.argv", [str(script), "--approximate"] + ([] if dry_run else ["--apply"])), \
                     patch("os.listdir", side_effect=lambda path: sorted(listdir(path))), \
-                    patch("os.rename", wraps=os.rename) as rename, \
+                    patch("os.rename", side_effect=rename_file) as rename, \
                     patch("logging.basicConfig"), patch("logging.FileHandler"), \
                     patch("logging.getLogger", return_value=logger):
+                if insensitive:
+                    stack.enter_context(patch('os.path.exists', side_effect=filesystem.exists))
+                    stack.enter_context(patch('os.path.lexists', side_effect=filesystem.lexists))
+                    stack.enter_context(patch('os.path.samefile', side_effect=filesystem.samefile))
                 result = runpy.run_path(str(script))
                 rename_count = rename.call_count
                 actual_operations = [
@@ -84,12 +114,12 @@ class RenameRomsTests(unittest.TestCase):
             warnings = [call.args[0] for call in logger.warning.call_args_list]
             return result["stats"], remaining, rename_count, summary, operations, warnings
 
-    def assert_preview_matches_run(self, files, games, ambiguous=False):
+    def assert_preview_matches_run(self, files, games, ambiguous=False, insensitive=False):
         planned, unchanged, dry_calls, summary, preview, dry_warnings = self.run_fixture(
-            files, games, True,
+            files, games, True, insensitive=insensitive,
         )
         actual, remaining, real_calls, real_summary, renamed, real_warnings = self.run_fixture(
-            files, games, False,
+            files, games, False, insensitive=insensitive,
         )
         self.assertEqual(unchanged, files)
         self.assertEqual(dry_calls, 0)
@@ -114,6 +144,60 @@ class RenameRomsTests(unittest.TestCase):
         for warnings in (dry_warnings, real_warnings):
             self.assertEqual(any("Ambiguous CRC" in message for message in warnings), ambiguous)
         return planned, remaining
+
+    def test_case_only_crc_rename_preserves_canonical_spelling_on_insensitive_volume(self):
+        payload = b'case-only CRC fixture'
+        stats, remaining = self.assert_preview_matches_run(
+            {'zelda.nes': payload}, {'Zelda': [f'{zlib.crc32(payload):08X}']},
+            insensitive=True,
+        )
+        self.assertEqual(stats['planned_crc'], 1)
+        self.assertEqual(remaining, {'Zelda.nes': payload})
+
+    def test_case_only_approximate_rename_preserves_canonical_spelling_on_insensitive_volume(self):
+        payload = b'case-only approximate fixture'
+        stats, remaining = self.assert_preview_matches_run(
+            {'mario.nes': payload}, {'Mario': []}, insensitive=True,
+        )
+        self.assertEqual(stats['planned_approximate'], 1)
+        self.assertEqual(remaining, {'Mario.nes': payload})
+
+    def test_case_only_destination_reservation_blocks_a_later_case_alias(self):
+        first, second = b'first case fixture', b'second case fixture'
+        stats, remaining = self.assert_preview_matches_run(
+            {'zelda.nes': first, 'zeldx.nes': second},
+            {'Zelda': [f'{zlib.crc32(first):08X}'], 'zelda': [f'{zlib.crc32(second):08X}']},
+            insensitive=True,
+        )
+        self.assertEqual(stats['planned_crc'], 1)
+        self.assertEqual(stats['skipped'], 1)
+        self.assertEqual(remaining, {'Zelda.nes': first, 'zeldx.nes': second})
+
+    def test_case_sensitive_volume_keeps_distinct_case_variant_destinations_available(self):
+        with tempfile.TemporaryDirectory() as directory:
+            probe = Path(directory) / 'case-probe.nes'
+            probe.write_bytes(b'fixture')
+            if probe.with_name(probe.name.upper()).exists():
+                self.skipTest('requires case-sensitive directory entries')
+        first, second = b'first case fixture', b'second case fixture'
+        stats, remaining = self.assert_preview_matches_run(
+            {'zelda.nes': first, 'zeldx.nes': second},
+            {'Zelda': [f'{zlib.crc32(first):08X}'], 'zelda': [f'{zlib.crc32(second):08X}']},
+        )
+        self.assertEqual(stats['planned_crc'], 2)
+        self.assertEqual(stats['skipped'], 0)
+        self.assertEqual(remaining, {'Zelda.nes': first, 'zelda.nes': second})
+
+    def test_projected_source_is_free_through_a_case_alias_after_rename(self):
+        first, second = b'first freed fixture', b'second freed fixture'
+        stats, remaining = self.assert_preview_matches_run(
+            {'aaa.nes': first, 'bbb.nes': second},
+            {'New AAA': [f'{zlib.crc32(first):08X}'], 'AAA': [f'{zlib.crc32(second):08X}']},
+            insensitive=True,
+        )
+        self.assertEqual(stats['planned_crc'], 2)
+        self.assertEqual(stats['skipped'], 0)
+        self.assertEqual(remaining, {'New AAA.nes': first, 'AAA.nes': second})
 
     def test_shared_crc_uses_filename_evidence_in_either_dat_order(self):
         payload = b"shared checksum"
@@ -192,12 +276,12 @@ class RenameRomsTests(unittest.TestCase):
         payload = b"shared checksum"
         crc = f"{zlib.crc32(payload):08X}"
         stats, remaining = self.assert_preview_matches_run(
-            {"Mario (U).nes": payload, "mario (USA).nes": payload},
+            {"Mario (U).nes": payload, "Mario (USA) .nes": payload},
             {"Mario (USA)": [crc], "Zelda": [crc]},
         )
         self.assertEqual(stats["planned_crc"], 1)
         self.assertEqual(stats["skipped"], 1)
-        self.assertEqual(remaining, {"Mario (USA).nes": payload, "mario (USA).nes": payload})
+        self.assertEqual(remaining, {"Mario (USA).nes": payload, "Mario (USA) .nes": payload})
 
     def test_exact_crc_matches_unrelated_filename(self):
         payload = b"exact payload"
@@ -411,6 +495,34 @@ class SafetyTests(unittest.TestCase):
                 self.assertFalse((root / 'rename_undo.json').exists())
                 warnings = ' '.join(call.args[0] for call in logger.warning.call_args_list)
                 self.assertIn('target already exists', warnings)
+
+    def test_distinct_case_variant_destination_is_never_overwritten(self):
+        for destination in ('file', 'hardlink', 'symlink'):
+            for mode in ('--dry-run', '--apply'):
+                with self.subTest(destination=destination, mode=mode), \
+                        tempfile.TemporaryDirectory() as directory:
+                    root = Path(directory)
+                    source = root / 'mario.nes'
+                    target = root / 'Mario.nes'
+                    source.write_bytes(b'source')
+                    if target.exists():
+                        self.skipTest('requires distinct case-variant directory entries')
+                    if destination == 'file':
+                        target.write_bytes(b'unrelated')
+                    elif destination == 'hardlink':
+                        os.link(source, target)
+                    else:
+                        target.symlink_to(source)
+                    target_contents = target.read_bytes()
+                    with patch('os.rename', wraps=os.rename) as moves:
+                        self.run_script(root, [mode, '--approximate'], ['Mario'])
+                    moves.assert_not_called()
+                    self.assertEqual(source.read_bytes(), b'source')
+                    self.assertEqual(target.read_bytes(), target_contents)
+                    self.assertIn('mario.nes', os.listdir(root))
+                    self.assertIn('Mario.nes', os.listdir(root))
+                    self.assertEqual(target.is_symlink(), destination == 'symlink')
+                    self.assertFalse((root / 'rename_undo.json').exists())
 
     def test_number_in_only_one_name_is_not_a_match(self):
         for filename, title in (("Final Fight 3.nes", "Final Fight (USA)"),

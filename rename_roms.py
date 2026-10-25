@@ -219,16 +219,33 @@ stats = {'processed': 0, 'renamed': 0, 'approximate': 0, 'skipped': 0, 'no_match
 # Simulate filesystem changes made by earlier dry-run operations.
 projected_destinations = set()
 projected_sources = set()
+# Infer the directory's lookup behavior from an existing ROM; preview never
+# creates a probe file. Extensions contain letters, so swapcase changes its name.
+sample_filename = next((filename for names in files_by_extension.values()
+                        for filename in names), None)
+case_insensitive_directory = bool(sample_filename and is_case_only_alias(
+    os.path.join(roms_path, sample_filename.swapcase()),
+    os.path.join(roms_path, sample_filename),
+))
 
-def destination_exists(filepath):
-    return (filepath in projected_destinations or
-            (os.path.lexists(filepath) and filepath not in projected_sources))
+def projected_path_key(filepath):
+    return undo_dependency_key(filepath) if case_insensitive_directory else filepath
+
+def destination_exists(filepath, current_source):
+    key = projected_path_key(filepath)
+    return (key in projected_destinations or
+            (os.path.lexists(filepath) and key not in projected_sources
+             # A different spelling of this source is one directory entry,
+             # not an occupied destination. Distinct entries remain protected.
+             and not is_case_only_alias(filepath, current_source)))
 
 def plan_rename(filepath, new_filepath):
-    projected_destinations.discard(filepath)
-    projected_sources.add(filepath)
-    projected_destinations.add(new_filepath)
-    projected_sources.discard(new_filepath)
+    source_key = projected_path_key(filepath)
+    destination_key = projected_path_key(new_filepath)
+    projected_destinations.discard(source_key)
+    projected_sources.add(source_key)
+    projected_destinations.add(destination_key)
+    projected_sources.discard(destination_key)
 
 if dry_run:
     log.info('Preview only — no files will be renamed; no log file will be written. Run with --apply to rename.')
@@ -399,7 +416,7 @@ for extension, filenames in files_by_extension.items():
             new_name = f"{title}.{extension}"
             new_name = correct_region_tag(new_name)
             new_filepath = os.path.join(roms_path, new_name)
-            if not destination_exists(new_filepath):
+            if not destination_exists(new_filepath, filepath):
                 if dry_run:
                     plan_rename(filepath, new_filepath)
                     stats['planned_crc'] += 1
@@ -440,7 +457,7 @@ for extension, filenames in files_by_extension.items():
                 new_name = f"{closest_match}.{extension}"
                 new_name = correct_region_tag(new_name)
                 new_filepath = os.path.join(roms_path, new_name)
-                if not destination_exists(new_filepath):
+                if not destination_exists(new_filepath, filepath):
                     if dry_run:
                         plan_rename(filepath, new_filepath)
                         stats['planned_approximate'] += 1
